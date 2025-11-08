@@ -31,21 +31,19 @@ impl EditorPane {
 
                 // Check if cursor is on this line
                 if line_num == engine.buffer.cursor_line && engine.cursor_visible {
-                    // Insert cursor character
+                    // Insert cursor character (use char indices, not byte indices)
                     let mut spans = Vec::new();
                     let cursor_col = engine.buffer.cursor_col;
+                    let chars: Vec<char> = line_content.chars().collect();
 
-                    if cursor_col > 0 {
-                        spans.push(Span::raw(&line_content[..cursor_col.min(line_content.len())]));
+                    // Text before cursor
+                    if cursor_col > 0 && cursor_col <= chars.len() {
+                        let before: String = chars[..cursor_col].iter().collect();
+                        spans.push(Span::raw(before));
                     }
 
-                    // Cursor
-                    let cursor_char = if cursor_col < line_content.len() {
-                        line_content.chars().nth(cursor_col).unwrap_or(' ')
-                    } else {
-                        ' '
-                    };
-
+                    // Cursor character
+                    let cursor_char = chars.get(cursor_col).copied().unwrap_or(' ');
                     spans.push(Span::styled(
                         cursor_char.to_string(),
                         Style::default()
@@ -54,8 +52,10 @@ impl EditorPane {
                             .add_modifier(Modifier::BOLD),
                     ));
 
-                    if cursor_col + 1 < line_content.len() {
-                        spans.push(Span::raw(&line_content[cursor_col + 1..]));
+                    // Text after cursor
+                    if cursor_col + 1 < chars.len() {
+                        let after: String = chars[cursor_col + 1..].iter().collect();
+                        spans.push(Span::raw(after));
                     }
 
                     Line::from(spans)

@@ -39,12 +39,28 @@ impl EditorBuffer {
         if line >= self.lines.len() {
             self.lines.resize(line + 1, String::new());
         }
-        self.lines[line].insert(col, ch);
+        let line_str = &mut self.lines[line];
+
+        // Convert char index to byte index
+        let byte_idx = line_str
+            .char_indices()
+            .nth(col)
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| line_str.len());
+
+        line_str.insert(byte_idx, ch);
     }
 
     pub fn delete_char(&mut self, line: usize, col: usize) {
-        if line < self.lines.len() && col < self.lines[line].len() {
-            self.lines[line].remove(col);
+        if line >= self.lines.len() {
+            return;
+        }
+
+        let line_str = &mut self.lines[line];
+
+        // Convert char index to byte index
+        if let Some((byte_idx, _)) = line_str.char_indices().nth(col) {
+            line_str.remove(byte_idx);
         }
     }
 
