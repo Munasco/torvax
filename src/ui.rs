@@ -17,6 +17,8 @@ use crate::panes::{EditorPane, FileTreePane, StatusBarPane, TerminalPane};
 
 pub struct UI {
     should_quit: bool,
+    should_reload: bool,
+    is_commit_specified: bool,
     file_tree: FileTreePane,
     editor: EditorPane,
     terminal: TerminalPane,
@@ -26,9 +28,11 @@ pub struct UI {
 }
 
 impl UI {
-    pub fn new(speed_ms: u64) -> Self {
+    pub fn new(speed_ms: u64, is_commit_specified: bool) -> Self {
         Self {
             should_quit: false,
+            should_reload: false,
+            is_commit_specified,
             file_tree: FileTreePane,
             editor: EditorPane,
             terminal: TerminalPane,
@@ -43,7 +47,7 @@ impl UI {
         self.metadata = Some(metadata);
     }
 
-    pub fn run(&mut self) -> Result<()> {
+    pub fn run(&mut self) -> Result<bool> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -60,7 +64,8 @@ impl UI {
         )?;
         terminal.show_cursor()?;
 
-        result
+        result?;
+        Ok(self.should_reload)
     }
 
     fn run_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -92,6 +97,18 @@ impl UI {
                         }
                         _ => {}
                     }
+                }
+            }
+
+            // Check if animation finished
+            if self.engine.is_finished() {
+                if self.is_commit_specified {
+                    // Commit was specified - just quit
+                    self.should_quit = true;
+                } else {
+                    // Random commit - reload with new commit
+                    self.should_reload = true;
+                    self.should_quit = true;
                 }
             }
 

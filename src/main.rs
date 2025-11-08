@@ -71,19 +71,28 @@ impl Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let repo_path = args.validate()?;
-
-    // Load git repository and commit
     let repo = GitRepository::open(&repo_path)?;
-    let metadata = if let Some(commit_hash) = &args.commit {
-        repo.get_commit(commit_hash)?
-    } else {
-        repo.random_commit()?
-    };
 
-    // Launch UI with animation
-    let mut ui = UI::new(args.speed);
-    ui.load_commit(metadata);
-    ui.run()?;
+    let is_commit_specified = args.commit.is_some();
+
+    loop {
+        // Load commit
+        let metadata = if let Some(commit_hash) = &args.commit {
+            repo.get_commit(commit_hash)?
+        } else {
+            repo.random_commit()?
+        };
+
+        // Launch UI with animation
+        let mut ui = UI::new(args.speed, is_commit_specified);
+        ui.load_commit(metadata);
+        let should_reload = ui.run()?;
+
+        // If reload is not requested, break the loop
+        if !should_reload {
+            break;
+        }
+    }
 
     Ok(())
 }
