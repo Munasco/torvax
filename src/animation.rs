@@ -95,7 +95,8 @@ pub enum AnimationStep {
     MoveCursor { line: usize, col: usize },
     Pause { duration_ms: u64 },
     SwitchFile { file_index: usize, content: String },
-    TerminalCommand { command: String },
+    TerminalPrompt,
+    TerminalTypeChar { ch: char },
     TerminalOutput { text: String },
 }
 
@@ -146,6 +147,14 @@ impl AnimationEngine {
         self.viewport_height = height;
     }
 
+    /// Add a terminal command with typing animation
+    fn add_terminal_command(&mut self, command: &str) {
+        self.steps.push(AnimationStep::TerminalPrompt);
+        for ch in command.chars() {
+            self.steps.push(AnimationStep::TerminalTypeChar { ch });
+        }
+    }
+
     /// Load a commit and generate animation steps
     pub fn load_commit(&mut self, metadata: &CommitMetadata) {
         self.steps.clear();
@@ -156,10 +165,7 @@ impl AnimationEngine {
 
         // Git checkout to parent commit (simulation)
         let parent_hash = format!("{}^", &metadata.hash[..7]);
-        self.steps
-            .push(AnimationStep::TerminalCommand {
-                command: format!("git checkout {}", parent_hash),
-            });
+        self.add_terminal_command(&format!("git checkout {}", parent_hash));
         self.steps.push(AnimationStep::Pause { duration_ms: 500 });
         self.steps.push(AnimationStep::TerminalOutput {
             text: format!("HEAD is now at {} Previous commit", parent_hash),
@@ -189,17 +195,12 @@ impl AnimationEngine {
 
         // Git add
         self.steps.push(AnimationStep::Pause { duration_ms: 2000 });
-        self.steps.push(AnimationStep::TerminalCommand {
-            command: "git add .".to_string(),
-        });
+        self.add_terminal_command("git add .");
         self.steps.push(AnimationStep::Pause { duration_ms: 500 });
 
         // Git commit
         let commit_message = metadata.message.lines().next().unwrap_or("Update");
-        self.steps
-            .push(AnimationStep::TerminalCommand {
-                command: format!("git commit -m \"{}\"", commit_message),
-            });
+        self.add_terminal_command(&format!("git commit -m \"{}\"", commit_message));
         self.steps.push(AnimationStep::Pause { duration_ms: 800 });
         self.steps.push(AnimationStep::TerminalOutput {
             text: format!("[main {}] {}", &metadata.hash[..7], commit_message),
@@ -214,9 +215,7 @@ impl AnimationEngine {
         self.steps.push(AnimationStep::Pause { duration_ms: 1000 });
 
         // Git push
-        self.steps.push(AnimationStep::TerminalCommand {
-            command: "git push origin main".to_string(),
-        });
+        self.add_terminal_command("git push origin main");
         self.steps.push(AnimationStep::Pause { duration_ms: 500 });
         self.steps.push(AnimationStep::TerminalOutput {
             text: "Enumerating objects: 5, done.".to_string(),
@@ -426,9 +425,15 @@ impl AnimationEngine {
                 self.current_file_index = file_index;
                 self.buffer = EditorBuffer::from_content(&content);
             }
-            AnimationStep::TerminalCommand { command } => {
-                // Add command prompt line
-                self.terminal_lines.push(format!("$ {}", command));
+            AnimationStep::TerminalPrompt => {
+                // Start a new command line with prompt
+                self.terminal_lines.push("$ ".to_string());
+            }
+            AnimationStep::TerminalTypeChar { ch } => {
+                // Add character to the last terminal line
+                if let Some(last_line) = self.terminal_lines.last_mut() {
+                    last_line.push(ch);
+                }
             }
             AnimationStep::TerminalOutput { text } => {
                 // Add output line
