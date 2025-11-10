@@ -106,9 +106,9 @@ impl<'a> UI<'a> {
             }
 
             // Update viewport height for scroll calculation
-            // Total height, 80% goes to editor area
             let size = terminal.size()?;
-            let viewport_height = (size.height as f32 * 0.8 * 0.8) as usize; // 80% of 80% for editor
+            // Editor area: 70% (right column) × 80% (editor pane) = 56% of total height
+            let viewport_height = (size.height as f32 * 0.70 * 0.80) as usize;
             self.engine.set_viewport_height(viewport_height);
 
             // Tick the animation engine
