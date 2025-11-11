@@ -19,6 +19,7 @@ pub struct FileTreePane {
     cached_total_display_lines: usize,
     cached_metadata_id: Option<String>,
     cached_current_file_index: Option<usize>,
+    cached_content_width: Option<usize>,
 }
 
 impl FileTreePane {
@@ -29,6 +30,7 @@ impl FileTreePane {
             cached_total_display_lines: 1,
             cached_metadata_id: None,
             cached_current_file_index: None,
+            cached_content_width: None,
         }
     }
 
@@ -41,9 +43,10 @@ impl FileTreePane {
     ) {
         let metadata_id = metadata.hash.clone();
 
-        // Only recalculate if metadata or current file changed
+        // Only recalculate if metadata, current file, or content width changed
         if self.cached_metadata_id.as_ref() == Some(&metadata_id)
             && self.cached_current_file_index == Some(current_file_index)
+            && self.cached_content_width == Some(content_width)
         {
             return;
         }
@@ -56,6 +59,7 @@ impl FileTreePane {
         self.cached_total_display_lines = total_display_lines;
         self.cached_metadata_id = Some(metadata_id);
         self.cached_current_file_index = Some(current_file_index);
+        self.cached_content_width = Some(content_width);
     }
 
     pub fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
