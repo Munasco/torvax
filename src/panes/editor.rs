@@ -1,20 +1,19 @@
 use crate::animation::{ActivePane, AnimationEngine};
 use crate::theme::Theme;
+use crate::widgets::SelectableParagraph;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Padding, Paragraph, Wrap},
+    widgets::{Block, Padding},
     Frame,
 };
-use unicode_width::UnicodeWidthStr;
 
 pub struct EditorPane;
 
 struct HighlightContext<'a> {
     line_content: &'a str,
     line_num: usize,
-    is_cursor_line: bool,
     show_cursor: bool,
     cursor_col: usize,
     cursor_line: usize,
@@ -24,7 +23,6 @@ struct HighlightContext<'a> {
     new_line_offsets: &'a [usize],
     line_offset: isize,
     theme: &'a Theme,
-    distance_opacity: f32,
 }
 
 impl EditorPane {
@@ -34,8 +32,6 @@ impl EditorPane {
             .padding(Padding::vertical(1));
 
         let content_height = area.height.saturating_sub(2) as usize; // Subtract top and bottom padding
-                                                                     // Note: Padding::vertical doesn't affect width, so content_width = area.width
-        let content_width = area.width as usize;
         let scroll_offset = engine.buffer.scroll_offset;
         let buffer_lines = &engine.buffer.lines;
         let line_num_width = format!("{}", buffer_lines.len()).len().max(3);
@@ -47,20 +43,29 @@ impl EditorPane {
             .enumerate()
             .map(|(idx, line_content)| {
                 let line_num = scroll_offset + idx;
-                self.build_line(
-                    line_content,
-                    line_num,
-                    line_num_width,
-                    content_width,
-                    engine,
-                    theme,
-                )
+                self.build_line(line_content, line_num, line_num_width, engine, theme)
             })
             .collect();
 
-        let content = Paragraph::new(visible_lines)
+        // Calculate selected line index in visible_lines
+        let selected_line_index = if engine.buffer.cursor_line >= scroll_offset {
+            let idx = engine.buffer.cursor_line - scroll_offset;
+            if idx < visible_lines.len() {
+                Some(idx)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let content = SelectableParagraph::new(visible_lines)
             .block(block)
-            .wrap(Wrap { trim: false });
+            .selected_line(selected_line_index)
+            .selected_style(Style::default().bg(theme.editor_cursor_line_bg))
+            .background_style(Style::default().bg(theme.background_right))
+            .padding(Padding::horizontal(2))
+            .dim(20, 0.6);
         f.render_widget(content, area);
     }
 
@@ -69,56 +74,20 @@ impl EditorPane {
         line_content: &str,
         line_num: usize,
         line_num_width: usize,
-        content_width: usize,
         engine: &AnimationEngine,
         theme: &Theme,
     ) -> Line<'_> {
-        let is_cursor_line = line_num == engine.buffer.cursor_line;
         let cursor_line = engine.buffer.cursor_line;
-
-        // Calculate distance-based opacity (closer to cursor = brighter)
-        let distance = (line_num as isize - cursor_line as isize).unsigned_abs();
-        let max_distance = 20; // Lines beyond this distance have minimum opacity
-        let distance_opacity = if distance == 0 {
-            1.0 // Cursor line is full brightness
-        } else {
-            // Gradually fade from 1.0 to 0.6 based on distance
-            1.0 - (distance.min(max_distance) as f32 / max_distance as f32) * 0.5
-        };
+        let is_cursor_line = line_num == cursor_line;
 
         let mut spans = Vec::new();
 
-        // Left padding
-        if is_cursor_line {
-            spans.push(Span::styled(
-                "  ",
-                Style::default().bg(theme.editor_cursor_line_bg),
-            ));
-        } else {
-            spans.push(Span::raw("  "));
-        }
+        spans.push(self.render_line_number(line_num, is_cursor_line, line_num_width, theme));
 
-        spans.push(self.render_line_number(
-            line_num,
-            is_cursor_line,
-            line_num_width,
-            theme,
-            distance_opacity,
+        spans.push(Span::styled(
+            "  ",
+            Style::default().fg(theme.editor_separator),
         ));
-
-        let separator_style = if is_cursor_line {
-            Style::default()
-                .fg(theme.editor_separator)
-                .bg(theme.editor_cursor_line_bg)
-        } else {
-            let separator_color = self.apply_opacity(
-                theme.editor_separator,
-                distance_opacity,
-                theme.background_right,
-            );
-            Style::default().fg(separator_color)
-        };
-        spans.push(Span::styled("  ", separator_style));
 
         let show_cursor =
             is_cursor_line && engine.cursor_visible && engine.active_pane == ActivePane::Editor;
@@ -126,7 +95,6 @@ impl EditorPane {
         let line_spans = self.highlight_line(HighlightContext {
             line_content,
             line_num,
-            is_cursor_line,
             show_cursor,
             cursor_col: engine.buffer.cursor_col,
             cursor_line: engine.buffer.cursor_line,
@@ -136,45 +104,9 @@ impl EditorPane {
             new_line_offsets: &engine.buffer.new_content_line_offsets,
             line_offset: engine.line_offset,
             theme,
-            distance_opacity,
         });
 
         spans.extend(line_spans);
-
-        // Fill cursor line to the right edge with background color (before right padding)
-        if is_cursor_line {
-            // Calculate total display width already added to spans (without right padding)
-            // Use unicode width instead of char count to handle wide characters (CJK, emojis, etc.)
-            let current_width_without_right_pad: usize = spans.iter().map(|s| s.content.width()).sum();
-            let right_pad_width = 2;
-            let current_width = current_width_without_right_pad + right_pad_width;
-
-            // When wrapped, need to fill the last line to the right edge
-            let wrapped_lines = if content_width == 0 {
-                1
-            } else {
-                current_width.div_ceil(content_width).max(1)
-            };
-            let total_space_needed = wrapped_lines * content_width;
-            let fill_count = total_space_needed.saturating_sub(current_width);
-
-            if fill_count > 0 {
-                spans.push(Span::styled(
-                    " ".repeat(fill_count),
-                    Style::default().bg(theme.editor_cursor_line_bg),
-                ));
-            }
-        }
-
-        // Right padding
-        if is_cursor_line {
-            spans.push(Span::styled(
-                "  ",
-                Style::default().bg(theme.editor_cursor_line_bg),
-            ));
-        } else {
-            spans.push(Span::raw("  "));
-        }
 
         Line::from(spans)
     }
@@ -185,7 +117,6 @@ impl EditorPane {
         is_cursor_line: bool,
         width: usize,
         theme: &Theme,
-        distance_opacity: f32,
     ) -> Span<'_> {
         let line_num_str = format!("{:>width$} ", line_num + 1, width = width);
 
@@ -194,16 +125,10 @@ impl EditorPane {
                 line_num_str,
                 Style::default()
                     .fg(theme.editor_line_number_cursor)
-                    .bg(theme.editor_cursor_line_bg)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
-            let color = self.apply_opacity(
-                theme.editor_line_number,
-                distance_opacity,
-                theme.background_right,
-            );
-            Span::styled(line_num_str, Style::default().fg(color))
+            Span::styled(line_num_str, Style::default().fg(theme.editor_line_number))
         }
     }
 
@@ -299,16 +224,8 @@ impl EditorPane {
             let char_byte_end = char_byte_start + ch.len_utf8();
             relative_byte += ch.len_utf8();
 
-            let mut color =
+            let color =
                 self.get_char_color(char_byte_start, char_byte_end, line_highlights, ctx.theme);
-
-            // Apply distance-based opacity (blend with appropriate background)
-            let bg_color = if ctx.is_cursor_line {
-                ctx.theme.editor_cursor_line_bg
-            } else {
-                ctx.theme.background_right
-            };
-            color = self.apply_opacity(color, ctx.distance_opacity, bg_color);
 
             if ctx.show_cursor && char_idx == ctx.cursor_col {
                 // Cursor character - bright highlight
@@ -319,16 +236,8 @@ impl EditorPane {
                         .fg(ctx.theme.editor_cursor_char_fg)
                         .add_modifier(Modifier::BOLD),
                 ));
-            } else if ctx.is_cursor_line {
-                // Cursor line - subtle background
-                spans.push(Span::styled(
-                    ch.to_string(),
-                    Style::default()
-                        .fg(color)
-                        .bg(ctx.theme.editor_cursor_line_bg),
-                ));
             } else {
-                // Normal line
+                // Normal character
                 spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
             }
         }
@@ -358,18 +267,5 @@ impl EditorPane {
             .find(|h| char_byte_start >= h.0 && char_byte_end <= h.1)
             .map(|h| h.2.color(theme))
             .unwrap_or(theme.syntax_variable) // Use theme color instead of Color::White
-    }
-
-    fn apply_opacity(&self, foreground: Color, opacity: f32, background: Color) -> Color {
-        match (foreground, background) {
-            (Color::Rgb(fr, fg, fb), Color::Rgb(br, bg, bb)) => {
-                // Blend foreground and background: result = fg * opacity + bg * (1 - opacity)
-                let r = (fr as f32 * opacity + br as f32 * (1.0 - opacity)) as u8;
-                let g = (fg as f32 * opacity + bg as f32 * (1.0 - opacity)) as u8;
-                let b = (fb as f32 * opacity + bb as f32 * (1.0 - opacity)) as u8;
-                Color::Rgb(r, g, b)
-            }
-            _ => foreground, // For non-RGB colors, return as-is
-        }
     }
 }
