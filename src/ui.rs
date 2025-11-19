@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -78,7 +78,17 @@ impl<'a> UI<'a> {
 
     fn setup_signal_handler(should_exit: Arc<AtomicBool>) {
         ctrlc::set_handler(move || {
-            should_exit.store(true, Ordering::Relaxed);
+            // Restore terminal state before exiting
+            let _ = disable_raw_mode();
+            let _ = execute!(
+                io::stdout(),
+                LeaveAlternateScreen,
+                DisableMouseCapture,
+                crossterm::cursor::Show
+            );
+            should_exit.store(true, Ordering::SeqCst);
+            // Exit immediately for external signals (SIGTERM)
+            std::process::exit(0);
         })
         .expect("Error setting Ctrl-C handler");
     }
@@ -139,8 +149,14 @@ impl<'a> UI<'a> {
             // Poll for keyboard events at frame rate
             if event::poll(std::time::Duration::from_millis(8))? {
                 if let Event::Key(key) = event::read()? {
-                    if key.code == KeyCode::Esc {
-                        self.state = UIState::Finished;
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            self.state = UIState::Finished;
+                        }
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.state = UIState::Finished;
+                        }
+                        _ => {}
                     }
                 }
             }
