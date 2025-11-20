@@ -328,7 +328,7 @@ impl GitRepository {
         Ok(())
     }
 
-    pub fn next_range_commit(&self) -> Result<CommitMetadata> {
+    pub fn next_range_commit_asc(&self) -> Result<CommitMetadata> {
         let range = self.commit_range.borrow();
         let commits = range.as_ref().context("Commit range not set")?;
         let mut index = self.commit_index.borrow_mut();
@@ -346,6 +346,49 @@ impl GitRepository {
 
         let commit = self.repo.find_commit(*selected_oid)?;
         drop(index);
+        drop(range);
+        Self::extract_metadata_with_changes(&self.repo, &commit)
+    }
+
+    pub fn next_range_commit_desc(&self) -> Result<CommitMetadata> {
+        let range = self.commit_range.borrow();
+        let commits = range.as_ref().context("Commit range not set")?;
+        let mut index = self.commit_index.borrow_mut();
+
+        if commits.is_empty() {
+            anyhow::bail!("No commits in range");
+        }
+
+        if *index >= commits.len() {
+            anyhow::bail!("All commits in range have been played");
+        }
+
+        // Desc order: newest first (reverse of asc)
+        let desc_index = commits.len() - 1 - *index;
+        let selected_oid = commits
+            .get(desc_index)
+            .context("Failed to select commit")?;
+        *index += 1;
+
+        let commit = self.repo.find_commit(*selected_oid)?;
+        drop(index);
+        drop(range);
+        Self::extract_metadata_with_changes(&self.repo, &commit)
+    }
+
+    pub fn random_range_commit(&self) -> Result<CommitMetadata> {
+        let range = self.commit_range.borrow();
+        let commits = range.as_ref().context("Commit range not set")?;
+
+        if commits.is_empty() {
+            anyhow::bail!("No commits in range");
+        }
+
+        let selected_oid = commits
+            .get(rand::rng().random_range(0..commits.len()))
+            .context("Failed to select random commit")?;
+
+        let commit = self.repo.find_commit(*selected_oid)?;
         drop(range);
         Self::extract_metadata_with_changes(&self.repo, &commit)
     }

@@ -208,11 +208,17 @@ fn main() -> Result<()> {
     let theme_name = args.theme.as_deref().unwrap_or(&config.theme);
     let speed = args.speed.unwrap_or(config.speed);
     let background = args.background.unwrap_or(config.background);
-    let order = args.order.unwrap_or(match config.order.as_str() {
+    let mut order = args.order.unwrap_or(match config.order.as_str() {
         "asc" => PlaybackOrder::Asc,
         "desc" => PlaybackOrder::Desc,
         _ => PlaybackOrder::Random,
     });
+
+    // Range mode defaults to asc (chronological) if not explicitly specified
+    if is_range_mode && args.order.is_none() {
+        order = PlaybackOrder::Asc;
+    }
+
     let loop_playback = args.loop_playback.unwrap_or(config.loop_playback);
     let mut theme = Theme::load(theme_name)?;
 
@@ -228,7 +234,11 @@ fn main() -> Result<()> {
 
     // Load initial commit
     let metadata = if is_range_mode {
-        repo.next_range_commit()?
+        match order {
+            PlaybackOrder::Random => repo.random_range_commit()?,
+            PlaybackOrder::Asc => repo.next_range_commit_asc()?,
+            PlaybackOrder::Desc => repo.next_range_commit_desc()?,
+        }
     } else if let Some(commit_hash) = &args.commit {
         repo.get_commit(commit_hash)?
     } else {

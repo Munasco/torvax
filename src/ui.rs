@@ -185,7 +185,11 @@ impl<'a> UI<'a> {
                     if Instant::now() >= resume_at {
                         if let Some(repo) = self.repo {
                             let result = if self.is_range_mode {
-                                repo.next_range_commit()
+                                match self.order {
+                                    PlaybackOrder::Random => repo.random_range_commit(),
+                                    PlaybackOrder::Asc => repo.next_range_commit_asc(),
+                                    PlaybackOrder::Desc => repo.next_range_commit_desc(),
+                                }
                             } else if self.commit_spec.is_some() {
                                 repo.get_commit(self.commit_spec.as_ref().unwrap())
                             } else {
@@ -203,7 +207,11 @@ impl<'a> UI<'a> {
                                     if self.loop_playback {
                                         repo.reset_index();
                                         let restart_result = if self.is_range_mode {
-                                            repo.next_range_commit()
+                                            match self.order {
+                                                PlaybackOrder::Random => repo.random_range_commit(),
+                                                PlaybackOrder::Asc => repo.next_range_commit_asc(),
+                                                PlaybackOrder::Desc => repo.next_range_commit_desc(),
+                                            }
                                         } else {
                                             match self.order {
                                                 PlaybackOrder::Random => repo.random_commit(),
