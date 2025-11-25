@@ -232,10 +232,15 @@ jobs:
             echo "Warning: Could not determine cargo hash"
           fi
 
-          # Commit and push the updated flake.nix
+      - name: Update flake.lock
+        run: nix flake lock
+
+      - name: Commit and push changes
+        run: |
+          VERSION=${{ needs.release.outputs.new_version }}
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add flake.nix
+          git add flake.nix flake.lock
           git commit -m "chore: update flake.nix hashes for $VERSION" || echo "No changes to commit"
           git push origin main
 
