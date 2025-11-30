@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-11-30
+
+### ✨ Features
+
+- feat: add Svelte syntax highlighting support ([3655e09](https://github.com/unhappychoice/gitlogue/commit/3655e09))
+- feat: add Lua syntax highlighting support ([76e7c6a](https://github.com/unhappychoice/gitlogue/commit/76e7c6a))
+- feat: add date filtering options for commit history ([da7fc17](https://github.com/unhappychoice/gitlogue/commit/da7fc17))
+
+### 🐛 Bug Fixes
+
+- fix: invalidate old cache by changing prefix-key ([52e803c](https://github.com/unhappychoice/gitlogue/commit/52e803c))
+- fix: update glibc version requirement to 2.35 ([c67e5a1](https://github.com/unhappychoice/gitlogue/commit/c67e5a1))
+- fix: use ubuntu-22.04 for Linux builds and remove cache from release ([90f7ae8](https://github.com/unhappychoice/gitlogue/commit/90f7ae8))
+- fix: update fzf and VHS examples for better compatibility (#109) ([84f77c5](https://github.com/unhappychoice/gitlogue/commit/84f77c5))
+- fix: return error instead of fallback for invalid commit timestamp ([dde2914](https://github.com/unhappychoice/gitlogue/commit/dde2914))
+- fix(docs): correct fzf integration example ([ca748da](https://github.com/unhappychoice/gitlogue/commit/ca748da))
+- fix: Correct date filter comparison logic in matches_date_filter function to be fully identical to Git ([c643eea](https://github.com/unhappychoice/gitlogue/commit/c643eea))
+- fix: Fix format error ([de3fb5d](https://github.com/unhappychoice/gitlogue/commit/de3fb5d))
+
+### 📝 Other Changes
+
+- chore: bump version to v0.5.0 ([d85784e](https://github.com/unhappychoice/gitlogue/commit/d85784e))
+- docs: update supported languages list ([6708fe9](https://github.com/unhappychoice/gitlogue/commit/6708fe9))
+- Update README to reflect new brew instructions (#111) ([bcb19f8](https://github.com/unhappychoice/gitlogue/commit/bcb19f8))
+- refactor: sort use statements consistently across files ([6f212b9](https://github.com/unhappychoice/gitlogue/commit/6f212b9))
+- refactor: sort TokenType enum and match arms alphabetically ([01db07e](https://github.com/unhappychoice/gitlogue/commit/01db07e))
+- docs: expand Nix installation instructions ([d63814a](https://github.com/unhappychoice/gitlogue/commit/d63814a))
+- ci: add flake.lock and update release workflow to maintain it ([3dac4ec](https://github.com/unhappychoice/gitlogue/commit/3dac4ec))
+- docs: add Nix installation method ([eebf770](https://github.com/unhappychoice/gitlogue/commit/eebf770))
+- chore: update flake.nix hashes for v0.4.1 ([ebdf0ee](https://github.com/unhappychoice/gitlogue/commit/ebdf0ee))
+
+
 ## [0.4.1] - 2025-11-25
 
 ### ✨ Features
@@ -17,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 📝 Other Changes
 
-- chore: bump version to v0.4.1 ([87f0d0c](https://github.com/unhappychoice/gitlogue/commit/87f0d0c))
+- chore: bump version to v0.4.1 ([2ff5ace](https://github.com/unhappychoice/gitlogue/commit/2ff5ace))
 - docs: add troubleshooting for glibc version errors ([77553a3](https://github.com/unhappychoice/gitlogue/commit/77553a3))
 - chore: update flake.nix hashes for v0.4.0 ([5467d70](https://github.com/unhappychoice/gitlogue/commit/5467d70))
 
