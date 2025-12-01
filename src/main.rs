@@ -8,6 +8,7 @@ mod ui;
 mod widgets;
 
 use anyhow::{Context, Result};
+use animation::SpeedRule;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use git::GitRepository;
@@ -134,6 +135,14 @@ pub struct Args {
         help = "Path to file containing ignore patterns (one per line, like .gitignore)"
     )]
     pub ignore_file: Option<PathBuf>,
+
+    #[arg(
+        long = "speed-rule",
+        value_name = "PATTERN:MS",
+        action = clap::ArgAction::Append,
+        help = "Set typing speed for files matching pattern (e.g., '*.java:50', '*.xml:5'). Can be specified multiple times."
+    )]
+    pub speed_rule: Vec<String>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -323,6 +332,18 @@ fn main() -> Result<()> {
         }
     };
 
+    // Parse speed rules from CLI arguments
+    let speed_rules: Vec<SpeedRule> = args
+        .speed_rule
+        .iter()
+        .filter_map(|s| {
+            SpeedRule::parse(s).or_else(|| {
+                eprintln!("Warning: Invalid speed rule '{}', skipping", s);
+                None
+            })
+        })
+        .collect();
+
     // Create UI with repository reference
     // Filtered modes (range/author/date) always need repo ref for iteration
     let repo_ref = if is_range_mode || is_filtered {
@@ -340,6 +361,7 @@ fn main() -> Result<()> {
         loop_playback,
         args.commit.clone(),
         is_range_mode,
+        speed_rules,
     );
     ui.load_commit(metadata);
     ui.run()?;

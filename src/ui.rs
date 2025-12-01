@@ -19,7 +19,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::animation::AnimationEngine;
+use crate::animation::{AnimationEngine, SpeedRule};
 use crate::git::{CommitMetadata, GitRepository};
 use crate::panes::{EditorPane, FileTreePane, StatusBarPane, TerminalPane};
 use crate::theme::Theme;
@@ -58,9 +58,13 @@ impl<'a> UI<'a> {
         loop_playback: bool,
         commit_spec: Option<String>,
         is_range_mode: bool,
+        speed_rules: Vec<SpeedRule>,
     ) -> Self {
         let should_exit = Arc::new(AtomicBool::new(false));
         Self::setup_signal_handler(should_exit.clone());
+
+        let mut engine = AnimationEngine::new(speed_ms);
+        engine.set_speed_rules(speed_rules);
 
         Self {
             state: UIState::Playing,
@@ -69,7 +73,7 @@ impl<'a> UI<'a> {
             editor: EditorPane,
             terminal: TerminalPane,
             status_bar: StatusBarPane,
-            engine: AnimationEngine::new(speed_ms),
+            engine,
             repo,
             should_exit,
             theme,

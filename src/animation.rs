@@ -1,11 +1,40 @@
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
+use globset::{Glob, GlobMatcher};
 use rand::Rng;
 use unicode_width::UnicodeWidthStr;
 
 use crate::git::{CommitMetadata, DiffHunk, FileChange, FileStatus, LineChangeType};
 use crate::syntax::Highlighter;
+
+/// A rule that specifies typing speed for files matching a glob pattern
+#[derive(Debug, Clone)]
+pub struct SpeedRule {
+    pub matcher: GlobMatcher,
+    pub speed_ms: u64,
+}
+
+impl SpeedRule {
+    /// Parse a speed rule from string format "PATTERN:SPEED_MS"
+    /// Example: "*.java:50" or "src/**/*.rs:30"
+    pub fn parse(s: &str) -> Option<Self> {
+        let parts: Vec<&str> = s.rsplitn(2, ':').collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        let speed_ms = parts[0].parse::<u64>().ok()?;
+        let pattern_str = parts[1];
+        let glob = Glob::new(pattern_str).ok()?;
+        let matcher = glob.compile_matcher();
+        Some(Self { matcher, speed_ms })
+    }
+
+    /// Check if a file path matches this rule
+    pub fn matches(&self, path: &str) -> bool {
+        self.matcher.is_match(path)
+    }
+}
 
 // Duration multipliers relative to typing speed
 const CURSOR_MOVE_PAUSE: f64 = 0.5; // Cursor movement between lines (base speed)
@@ -188,6 +217,7 @@ pub struct AnimationEngine {
     current_step: usize,
     last_update: Instant,
     speed_ms: u64,
+    base_speed_ms: u64,
     next_step_delay: u64,
     pause_until: Option<Instant>,
     pub cursor_visible: bool,
@@ -216,6 +246,8 @@ pub struct AnimationEngine {
     current_metadata: Option<CommitMetadata>,
     /// Pending metadata to be applied on ResetState
     pending_metadata: Option<CommitMetadata>,
+    /// Speed rules for different file patterns
+    speed_rules: Vec<SpeedRule>,
 }
 
 impl AnimationEngine {
@@ -230,6 +262,7 @@ impl AnimationEngine {
             current_step: 0,
             last_update: now,
             speed_ms,
+            base_speed_ms: speed_ms,
             next_step_delay: speed_ms,
             pause_until: None,
             cursor_visible: true,
@@ -249,7 +282,24 @@ impl AnimationEngine {
             dialog_typing_text: String::new(),
             current_metadata: None,
             pending_metadata: None,
+            speed_rules: Vec::new(),
         }
+    }
+
+    /// Set speed rules for file-specific typing speeds
+    pub fn set_speed_rules(&mut self, rules: Vec<SpeedRule>) {
+        self.speed_rules = rules;
+    }
+
+    /// Get the speed for a given file path based on speed rules
+    /// Returns the first matching rule's speed, or the base speed if no match
+    fn get_speed_for_file(&self, path: &str) -> u64 {
+        for rule in &self.speed_rules {
+            if rule.matches(path) {
+                return rule.speed_ms;
+            }
+        }
+        self.base_speed_ms
     }
 
     pub fn set_viewport_height(&mut self, height: usize) {
@@ -916,6 +966,9 @@ impl AnimationEngine {
                 self.current_file_index = file_index;
                 self.current_file_path = Some(path.clone());
                 self.buffer = EditorBuffer::from_content(&old_content);
+
+                // Update typing speed based on file-specific rules
+                self.speed_ms = self.get_speed_for_file(&path);
 
                 // Update syntax highlighter for new file
                 // This will clear language settings if not supported
