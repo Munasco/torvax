@@ -904,6 +904,10 @@ impl AnimationEngine {
                 let variation = rng.random_range(0.7..=1.3);
                 ((self.speed_ms as f64) * 2.0 * variation) as u64
             }
+            AnimationStep::Pause { .. } => {
+                // Pause timing is driven by `pause_until`; don't add extra delay
+                0
+            }
             _ => {
                 // Other steps use base speed
                 self.speed_ms
