@@ -22,6 +22,7 @@ gitlogue comes with 16 carefully crafted themes optimized for code readability a
 - **catppuccin** - Soothing pastel theme (Mocha variant) with soft, gentle colors.
 - **dracula** - Vibrant dark theme with rich purples and greens. High contrast for extended viewing.
 - **everforest** - Nature-inspired theme with earthy green tones. Easy on the eyes for long sessions.
+- **fluorite** - Elegant dark theme with purple and pink tones. Soft and sophisticated color scheme inspired by the mineral fluorite.
 - **github-dark** - GitHub's official dark theme. Clean and professional for familiar coding experience.
 - **gruvbox** - Retro groove color scheme with warm, earthy tones. Perfect for a cozy coding atmosphere.
 - **material** - Google's Material Design inspired theme. Modern and vibrant color palette.

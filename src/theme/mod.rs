@@ -74,6 +74,7 @@ impl Theme {
             "ayu-dark" => Ok(themes::ayu_dark()),
             "catppuccin" => Ok(themes::catppuccin()),
             "dracula" => Ok(themes::dracula()),
+            "fluorite" => Ok(themes::fluorite()),
             "everforest" => Ok(themes::everforest()),
             "github-dark" => Ok(themes::github_dark()),
             "gruvbox" => Ok(themes::gruvbox()),
@@ -105,6 +106,7 @@ impl Theme {
             "ayu-dark",
             "catppuccin",
             "dracula",
+            "fluorite"
             "everforest",
             "github-dark",
             "gruvbox",
