@@ -6,10 +6,10 @@ use ratatui::style::Color;
 /// Created by Rnbsov (https://github.com/Rnbsov)
 pub fn fluorite() -> Theme {
     Theme {
-        background_left: Color::Rgb(18, 12, 23),      // Sidebar (#120c17)
-        background_right: Color::Rgb(22, 17, 27),     // Editor (#16111b)
+        background_left: Color::Rgb(18, 12, 23),  // Sidebar (#120c17)
+        background_right: Color::Rgb(22, 17, 27), // Editor (#16111b)
 
-        editor_line_number:  Color::Rgb(42, 28, 54),
+        editor_line_number: Color::Rgb(42, 28, 54),
         editor_line_number_cursor: Color::Rgb(65, 43, 84),
         editor_separator: Color::Rgb(42, 28, 54),
         editor_cursor_char_bg: Color::Rgb(163, 109, 207),
@@ -23,16 +23,16 @@ pub fn fluorite() -> Theme {
         file_tree_directory: Color::Rgb(136, 92, 173),
         file_tree_current_file_bg: Color::Rgb(25, 17, 31),
         file_tree_current_file_fg: Color::Rgb(136, 92, 173),
-        file_tree_default:  Color::Rgb(91, 60, 117),
+        file_tree_default: Color::Rgb(91, 60, 117),
         file_tree_stats_added: Color::Rgb(129, 184, 139),
-        file_tree_stats_deleted:  Color::Rgb(91, 60, 117),
+        file_tree_stats_deleted: Color::Rgb(91, 60, 117),
 
-        terminal_command:  Color::Rgb(136, 92, 173),
+        terminal_command: Color::Rgb(136, 92, 173),
         terminal_output: Color::Rgb(110, 155, 188),
         terminal_cursor_bg: Color::Rgb(163, 109, 207),
         terminal_cursor_fg: Color::Rgb(22, 17, 27),
 
-        status_hash:  Color::Rgb(173, 133, 245),
+        status_hash: Color::Rgb(173, 133, 245),
         status_author: Color::Rgb(139, 203, 255),
         status_date: Color::Rgb(209, 123, 159),
         status_message: Color::Rgb(110, 155, 188),
