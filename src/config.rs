@@ -19,6 +19,8 @@ pub struct Config {
     pub ignore_patterns: Vec<String>,
     #[serde(default)]
     pub speed_rules: Vec<String>,
+    #[serde(default = "default_playback_controls")]
+    pub playback_controls: bool,
 }
 
 fn default_theme() -> String {
@@ -45,6 +47,10 @@ fn default_ignore_patterns() -> Vec<String> {
     Vec::new()
 }
 
+fn default_playback_controls() -> bool {
+    false
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -55,6 +61,7 @@ impl Default for Config {
             loop_playback: default_loop(),
             ignore_patterns: default_ignore_patterns(),
             speed_rules: Vec::new(),
+            playback_controls: default_playback_controls(),
         }
     }
 }
@@ -95,6 +102,7 @@ impl Config {
             doc["background"] = toml_edit::value(self.background);
             doc["order"] = toml_edit::value(self.order.as_str());
             doc["loop"] = toml_edit::value(self.loop_playback);
+            doc["playback_controls"] = toml_edit::value(self.playback_controls);
 
             // Update ignore_patterns as array
             let mut array = toml_edit::Array::new();
@@ -160,14 +168,18 @@ impl Config {
                  \n\
                  # Speed rules for different file types (pattern:milliseconds)\n\
                  # Examples: [\"*.java:50\", \"*.xml:5\", \"*.rs:30\"]\n\
-                 speed_rules = {}\n",
+                 speed_rules = {}\n\
+                 \n\
+                 # Enable manual playback controls (j/k/l)\n\
+                 playback_controls = {}\n",
                 self.theme,
                 self.speed,
                 self.background,
                 self.order,
                 self.loop_playback,
                 patterns_str,
-                speed_rules_str
+                speed_rules_str,
+                self.playback_controls
             )
         };
 

@@ -52,6 +52,9 @@ ignore_patterns = []
 # Speed rules for different file types (pattern:milliseconds)
 # Examples: ["*.java:50", "*.xml:5", "*.rs:30"]
 speed_rules = []
+
+# Enable manual playback controls (Ctrl+j/Ctrl+l for commits, j/l for line prev/next, J/L for change prev/next)
+playback_controls = false
 ```
 
 ## Configuration Options
@@ -184,6 +187,16 @@ speed_rules = [
 ```
 
 Note: CLI `--speed-rule` flags take priority over config file rules. Rules are evaluated in order (CLI first, then config).
+
+### `playback_controls`
+
+Enable keyboard playback controls without needing to pass `--playback-controls` each time.
+
+- **Type**: Boolean
+- **Default**: `false`
+- **Example**: `playback_controls = true`
+
+When set to `true`, gitlogue starts with manual controls enabled so you can use `Ctrl+j`/`Ctrl+l` for commit navigation, `j`/`l` for stepping to the previous/next line, and `J`/`L` for stepping to the previous/next change.
 
 ## Configuration Priority
 

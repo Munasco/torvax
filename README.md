@@ -107,6 +107,9 @@ gitlogue --commit abc123 --loop
 # Loop through a commit range
 gitlogue --commit HEAD~10..HEAD --loop
 
+# Enable manual playback controls (Ctrl+j/Ctrl+l commit prev/next, j/l line prev/next, J/L change prev/next, k=play/pause)
+gitlogue --playback-controls --order asc
+
 # View staged changes (default)
 gitlogue diff
 

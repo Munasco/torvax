@@ -19,7 +19,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::animation::{AnimationEngine, SpeedRule};
+use crate::animation::{AnimationEngine, SpeedRule, StepMode};
 use crate::git::{CommitMetadata, DiffMode, GitRepository};
 use crate::panes::{EditorPane, FileTreePane, StatusBarPane, TerminalPane};
 use crate::theme::Theme;
@@ -30,6 +30,12 @@ enum UIState {
     Playing,
     WaitingForNext { resume_at: Instant },
     Finished,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PlaybackState {
+    Playing,
+    Paused,
 }
 
 /// Main UI controller for the gitlogue terminal interface.
@@ -49,6 +55,10 @@ pub struct UI<'a> {
     commit_spec: Option<String>,
     is_range_mode: bool,
     diff_mode: Option<DiffMode>,
+    manual_controls: bool,
+    playback_state: PlaybackState,
+    history: Vec<CommitMetadata>,
+    history_index: Option<usize>,
 }
 
 impl<'a> UI<'a> {
@@ -63,6 +73,7 @@ impl<'a> UI<'a> {
         commit_spec: Option<String>,
         is_range_mode: bool,
         speed_rules: Vec<SpeedRule>,
+        manual_controls: bool,
     ) -> Self {
         let should_exit = Arc::new(AtomicBool::new(false));
         Self::setup_signal_handler(should_exit.clone());
@@ -86,6 +97,10 @@ impl<'a> UI<'a> {
             commit_spec,
             is_range_mode,
             diff_mode: None,
+            manual_controls,
+            playback_state: PlaybackState::Playing,
+            history: Vec::new(),
+            history_index: None,
         }
     }
 
@@ -113,8 +128,227 @@ impl<'a> UI<'a> {
 
     /// Loads a commit and starts the animation.
     pub fn load_commit(&mut self, metadata: CommitMetadata) {
+        self.play_commit(metadata, true);
+    }
+
+    fn play_commit(&mut self, metadata: CommitMetadata, record_history: bool) {
+        if record_history {
+            self.record_history(&metadata);
+        }
         self.engine.load_commit(&metadata);
+        if self.manual_controls {
+            match self.playback_state {
+                PlaybackState::Playing => self.engine.resume(),
+                PlaybackState::Paused => self.engine.pause(),
+            }
+        }
         self.state = UIState::Playing;
+    }
+
+    fn record_history(&mut self, metadata: &CommitMetadata) {
+        if !self.manual_controls {
+            return;
+        }
+
+        if let Some(index) = self.history_index {
+            if index + 1 < self.history.len() {
+                self.history.truncate(index + 1);
+            }
+        } else {
+            self.history.clear();
+        }
+
+        self.history.push(metadata.clone());
+        self.history_index = Some(self.history.len() - 1);
+    }
+
+    fn play_history_commit(&mut self, index: usize) -> bool {
+        if !self.manual_controls {
+            return false;
+        }
+
+        if let Some(metadata) = self.history.get(index).cloned() {
+            self.history_index = Some(index);
+            self.play_commit(metadata, false);
+            return true;
+        }
+
+        false
+    }
+
+    fn playback_status_line(&self) -> Option<String> {
+        if !self.manual_controls {
+            return None;
+        }
+
+        let state_label = match self.playback_state {
+            PlaybackState::Playing => "Playing",
+            PlaybackState::Paused => "Paused",
+        };
+
+        Some(format!(
+            "manual controls ({state_label}): Ctrl+j=prev commit  Ctrl+l=next commit  j=prev line  l=next line  J=prev change  L=next change  k=play/pause"
+        ))
+    }
+
+    fn toggle_pause(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+
+        match self.playback_state {
+            PlaybackState::Playing => {
+                self.playback_state = PlaybackState::Paused;
+                self.engine.pause();
+            }
+            PlaybackState::Paused => {
+                self.playback_state = PlaybackState::Playing;
+                self.engine.resume();
+            }
+        }
+    }
+
+    fn ensure_manual_pause(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+
+        if self.playback_state != PlaybackState::Paused {
+            self.playback_state = PlaybackState::Paused;
+            self.engine.pause();
+        }
+    }
+
+    fn step_line(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+        self.ensure_manual_pause();
+        let _ = self.engine.manual_step(StepMode::Line);
+    }
+
+    fn step_change(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+        self.ensure_manual_pause();
+        let _ = self.engine.manual_step(StepMode::Change);
+    }
+
+    fn step_line_back(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+        self.ensure_manual_pause();
+        let _ = self.engine.restore_line_checkpoint();
+    }
+
+    fn step_change_back(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+        self.ensure_manual_pause();
+        let _ = self.engine.restore_change_checkpoint();
+    }
+
+    fn handle_prev(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+
+        if let Some(index) = self.history_index {
+            if index > 0 {
+                let target = index - 1;
+                self.play_history_commit(target);
+            }
+        }
+    }
+
+    fn handle_next(&mut self) {
+        if !self.manual_controls {
+            return;
+        }
+
+        if let Some(index) = self.history_index {
+            if index + 1 < self.history.len() {
+                let target = index + 1;
+                if self.play_history_commit(target) {
+                    return;
+                }
+            }
+        }
+
+        if self.repo.is_none() && self.diff_mode.is_none() {
+            return;
+        }
+
+        self.advance_to_next_commit();
+    }
+
+    fn advance_to_next_commit(&mut self) -> bool {
+        if let Some(diff_mode) = self.diff_mode {
+            if let Some(repo) = self.repo {
+                match repo.get_working_tree_diff(diff_mode) {
+                    Ok(metadata) if !metadata.changes.is_empty() => {
+                        self.load_commit(metadata);
+                        return true;
+                    }
+                    _ => {
+                        self.state = UIState::Finished;
+                        return false;
+                    }
+                }
+            }
+            self.state = UIState::Finished;
+            return false;
+        }
+
+        let Some(repo) = self.repo else {
+            self.state = UIState::Finished;
+            return false;
+        };
+
+        match self.fetch_repo_commit(repo) {
+            Ok(metadata) => {
+                self.load_commit(metadata);
+                true
+            }
+            Err(_) => {
+                if self.loop_playback {
+                    repo.reset_index();
+                    if let Ok(metadata) = self.fetch_repo_commit(repo) {
+                        self.load_commit(metadata);
+                        true
+                    } else {
+                        self.state = UIState::Finished;
+                        false
+                    }
+                } else {
+                    self.state = UIState::Finished;
+                    false
+                }
+            }
+        }
+    }
+
+    fn fetch_repo_commit(&self, repo: &GitRepository) -> Result<CommitMetadata> {
+        if self.is_range_mode {
+            return match self.order {
+                PlaybackOrder::Random => repo.random_range_commit(),
+                PlaybackOrder::Asc => repo.next_range_commit_asc(),
+                PlaybackOrder::Desc => repo.next_range_commit_desc(),
+            };
+        }
+
+        if let Some(spec) = &self.commit_spec {
+            return repo.get_commit(spec);
+        }
+
+        match self.order {
+            PlaybackOrder::Random => repo.random_commit(),
+            PlaybackOrder::Asc => repo.next_asc_commit(),
+            PlaybackOrder::Desc => repo.next_desc_commit(),
+        }
     }
 
     /// Runs the main UI event loop.
@@ -176,6 +410,21 @@ impl<'a> UI<'a> {
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             self.state = UIState::Finished;
                         }
+                        KeyCode::Char(ch) => {
+                            if self.manual_controls {
+                                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                                match (ctrl, ch) {
+                                    (true, 'j' | 'J') => self.handle_prev(),
+                                    (true, 'l' | 'L') => self.handle_next(),
+                                    (false, 'l') => self.step_line(),
+                                    (false, 'j') => self.step_line_back(),
+                                    (false, 'L') => self.step_change(),
+                                    (false, 'J') => self.step_change_back(),
+                                    (_, 'k' | 'K') => self.toggle_pause(),
+                                    _ => {}
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -200,76 +449,13 @@ impl<'a> UI<'a> {
                 }
                 UIState::WaitingForNext { resume_at } => {
                     if Instant::now() >= resume_at {
-                        // Handle diff mode looping
-                        if let Some(diff_mode) = self.diff_mode {
-                            if let Some(repo) = self.repo {
-                                // Refresh the working tree diff
-                                match repo.get_working_tree_diff(diff_mode) {
-                                    Ok(metadata) if !metadata.changes.is_empty() => {
-                                        self.load_commit(metadata);
-                                    }
-                                    _ => {
-                                        // No more changes, finish
-                                        self.state = UIState::Finished;
-                                    }
-                                }
-                            } else {
-                                self.state = UIState::Finished;
-                            }
-                        } else if let Some(repo) = self.repo {
-                            let result = if self.is_range_mode {
-                                match self.order {
-                                    PlaybackOrder::Random => repo.random_range_commit(),
-                                    PlaybackOrder::Asc => repo.next_range_commit_asc(),
-                                    PlaybackOrder::Desc => repo.next_range_commit_desc(),
-                                }
-                            } else if self.commit_spec.is_some() {
-                                repo.get_commit(self.commit_spec.as_ref().unwrap())
-                            } else {
-                                match self.order {
-                                    PlaybackOrder::Random => repo.random_commit(),
-                                    PlaybackOrder::Asc => repo.next_asc_commit(),
-                                    PlaybackOrder::Desc => repo.next_desc_commit(),
-                                }
-                            };
-                            match result {
-                                Ok(metadata) => {
-                                    self.load_commit(metadata);
-                                }
-                                Err(_) => {
-                                    if self.loop_playback {
-                                        repo.reset_index();
-                                        let restart_result = if self.is_range_mode {
-                                            match self.order {
-                                                PlaybackOrder::Random => repo.random_range_commit(),
-                                                PlaybackOrder::Asc => repo.next_range_commit_asc(),
-                                                PlaybackOrder::Desc => {
-                                                    repo.next_range_commit_desc()
-                                                }
-                                            }
-                                        } else {
-                                            match self.order {
-                                                PlaybackOrder::Random => repo.random_commit(),
-                                                PlaybackOrder::Asc => repo.next_asc_commit(),
-                                                PlaybackOrder::Desc => repo.next_desc_commit(),
-                                            }
-                                        };
-                                        match restart_result {
-                                            Ok(metadata) => {
-                                                self.load_commit(metadata);
-                                            }
-                                            Err(_) => {
-                                                self.state = UIState::Finished;
-                                            }
-                                        }
-                                    } else {
-                                        self.state = UIState::Finished;
-                                    }
-                                }
-                            }
-                        } else {
-                            self.state = UIState::Finished;
+                        if self.manual_controls
+                            && matches!(self.playback_state, PlaybackState::Paused)
+                        {
+                            continue;
                         }
+
+                        self.advance_to_next_commit();
                     }
                 }
                 UIState::Finished => {
@@ -342,11 +528,13 @@ impl<'a> UI<'a> {
         f.render_widget(left_sep, left_layout[1]);
 
         // Render commit info
+        let playback_status = self.playback_status_line();
         self.status_bar.render(
             f,
             left_layout[2],
             self.engine.current_metadata(),
             &self.theme,
+            playback_status.as_deref(),
         );
 
         // Render editor

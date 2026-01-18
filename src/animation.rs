@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use globset::{Glob, GlobMatcher};
 use rand::RngExt;
+use std::collections::VecDeque;
 use unicode_width::UnicodeWidthStr;
 
 use crate::git::{CommitMetadata, DiffHunk, FileChange, FileStatus, LineChangeType};
@@ -60,6 +61,9 @@ const COMMIT_OUTPUT_PAUSE: f64 = 33.3; // After commit output
 const GIT_PUSH_PAUSE: f64 = 16.7; // After git push command
 const PUSH_OUTPUT_PAUSE: f64 = 10.0; // Between push output lines
 const PUSH_FINAL_PAUSE: f64 = 66.7; // After final push output
+
+const MAX_LINE_CHECKPOINTS: usize = 200;
+const MAX_CHANGE_CHECKPOINTS: usize = 64;
 
 /// Represents the current state of the editor buffer
 #[derive(Debug, Clone)]
@@ -214,6 +218,47 @@ pub enum ActivePane {
     Terminal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StepMode {
+    Line,
+    Change,
+}
+
+#[derive(Clone)]
+struct ManualCheckpoint {
+    step_index: usize,
+    buffer: EditorBuffer,
+    current_file_index: usize,
+    current_file_path: Option<String>,
+    terminal_lines: Vec<String>,
+    active_pane: ActivePane,
+    line_offset: isize,
+    dialog_title: Option<String>,
+    dialog_typing_text: String,
+}
+
+impl ManualCheckpoint {
+    fn new(engine: &AnimationEngine) -> Self {
+        Self {
+            step_index: engine.current_step,
+            buffer: engine.buffer.clone(),
+            current_file_index: engine.current_file_index,
+            current_file_path: engine.current_file_path.clone(),
+            terminal_lines: engine.terminal_lines.clone(),
+            active_pane: engine.active_pane.clone(),
+            line_offset: engine.line_offset,
+            dialog_title: engine.dialog_title.clone(),
+            dialog_typing_text: engine.dialog_typing_text.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CheckpointKind {
+    Line,
+    Change,
+}
+
 /// Main animation engine
 pub struct AnimationEngine {
     pub buffer: EditorBuffer,
@@ -253,6 +298,9 @@ pub struct AnimationEngine {
     pending_metadata: Option<CommitMetadata>,
     /// Speed rules for different file patterns
     speed_rules: Vec<SpeedRule>,
+    paused: bool,
+    line_checkpoints: VecDeque<ManualCheckpoint>,
+    change_checkpoints: VecDeque<ManualCheckpoint>,
 }
 
 impl AnimationEngine {
@@ -289,7 +337,196 @@ impl AnimationEngine {
             current_metadata: None,
             pending_metadata: None,
             speed_rules: Vec::new(),
+            paused: false,
+            line_checkpoints: VecDeque::new(),
+            change_checkpoints: VecDeque::new(),
         }
+    }
+
+    /// Pause the animation playback.
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    /// Resume animation playback from the current position.
+    pub fn resume(&mut self) {
+        if self.paused {
+            self.paused = false;
+            let now = Instant::now();
+            self.last_update = now;
+            self.last_frame = now;
+        }
+    }
+
+    /// Execute animation steps manually until the next boundary for the given mode.
+    pub fn manual_step(&mut self, mode: StepMode) -> bool {
+        if self.state != AnimationState::Playing {
+            return false;
+        }
+
+        if self.current_step >= self.steps.len() {
+            self.state = AnimationState::Finished;
+            return false;
+        }
+
+        self.pause_until = None;
+        let mut executed = false;
+
+        while self.current_step < self.steps.len() {
+            let step = self.steps[self.current_step].clone();
+            self.execute_step(step.clone());
+            self.current_step += 1;
+            executed = true;
+
+            if self.current_step >= self.steps.len() {
+                self.state = AnimationState::Finished;
+            }
+
+            if Self::is_boundary_step(&step, mode) {
+                break;
+            }
+        }
+
+        if executed {
+            let now = Instant::now();
+            self.last_update = now;
+            self.last_frame = now;
+        }
+
+        executed
+    }
+
+    pub fn restore_line_checkpoint(&mut self) -> bool {
+        if self.line_checkpoints.len() < 2 {
+            return false;
+        }
+        self.line_checkpoints.pop_back();
+        if let Some(snapshot) = self.line_checkpoints.back().cloned() {
+            self.apply_checkpoint(snapshot);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn restore_change_checkpoint(&mut self) -> bool {
+        if self.change_checkpoints.len() < 2 {
+            return false;
+        }
+        self.change_checkpoints.pop_back();
+        if let Some(snapshot) = self.change_checkpoints.back().cloned() {
+            self.apply_checkpoint(snapshot);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn apply_checkpoint(&mut self, snapshot: ManualCheckpoint) {
+        self.current_step = snapshot.step_index;
+        self.buffer = snapshot.buffer;
+        self.current_file_index = snapshot.current_file_index;
+        self.current_file_path = snapshot.current_file_path;
+        self.terminal_lines = snapshot.terminal_lines;
+        self.active_pane = snapshot.active_pane;
+        self.line_offset = snapshot.line_offset;
+        self.dialog_title = snapshot.dialog_title;
+        self.dialog_typing_text = snapshot.dialog_typing_text;
+        self.pause_until = None;
+        self.paused = true;
+        self.state = AnimationState::Playing;
+    }
+
+    fn is_boundary_step(step: &AnimationStep, mode: StepMode) -> bool {
+        match mode {
+            StepMode::Line => matches!(
+                step,
+                AnimationStep::Pause { .. }
+                    | AnimationStep::SwitchFile { .. }
+                    | AnimationStep::TerminalPrompt
+                    | AnimationStep::TerminalOutput { .. }
+                    | AnimationStep::ResetState
+            ),
+            StepMode::Change => match step {
+                AnimationStep::SwitchFile { .. }
+                | AnimationStep::TerminalPrompt
+                | AnimationStep::TerminalOutput { .. }
+                | AnimationStep::ResetState => true,
+                AnimationStep::Pause { multiplier } => Self::is_change_pause(*multiplier),
+                _ => false,
+            },
+        }
+    }
+
+    fn handle_step_checkpoint(&mut self, step: &AnimationStep) {
+        match step {
+            AnimationStep::ResetState => {
+                self.clear_checkpoints();
+                self.record_checkpoint(CheckpointKind::Change);
+                self.record_checkpoint(CheckpointKind::Line);
+            }
+            AnimationStep::SwitchFile { .. } => {
+                self.line_checkpoints.clear();
+                self.record_checkpoint(CheckpointKind::Change);
+                self.record_checkpoint(CheckpointKind::Line);
+            }
+            AnimationStep::Pause { multiplier } => {
+                if self.active_pane == ActivePane::Editor {
+                    self.record_checkpoint(CheckpointKind::Line);
+                    if Self::is_change_pause(*multiplier) {
+                        self.record_checkpoint(CheckpointKind::Change);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn is_change_pause(multiplier: f64) -> bool {
+        (multiplier - HUNK_PAUSE).abs() < f64::EPSILON
+    }
+
+    fn record_checkpoint(&mut self, kind: CheckpointKind) {
+        if self.current_step == 0 {
+            return;
+        }
+
+        let snapshot = ManualCheckpoint::new(self);
+        match kind {
+            CheckpointKind::Line => {
+                if self
+                    .line_checkpoints
+                    .back()
+                    .map(|c| c.step_index == snapshot.step_index)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                self.line_checkpoints.push_back(snapshot);
+                if self.line_checkpoints.len() > MAX_LINE_CHECKPOINTS {
+                    self.line_checkpoints.pop_front();
+                }
+            }
+            CheckpointKind::Change => {
+                if self
+                    .change_checkpoints
+                    .back()
+                    .map(|c| c.step_index == snapshot.step_index)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+                self.change_checkpoints.push_back(snapshot);
+                if self.change_checkpoints.len() > MAX_CHANGE_CHECKPOINTS {
+                    self.change_checkpoints.pop_front();
+                }
+            }
+        }
+    }
+
+    fn clear_checkpoints(&mut self) {
+        self.line_checkpoints.clear();
+        self.change_checkpoints.clear();
     }
 
     /// Set speed rules for file-specific typing speeds
@@ -621,6 +858,7 @@ impl AnimationEngine {
 
         // Start with empty editor (no file opened yet)
         self.buffer = EditorBuffer::new();
+        self.clear_checkpoints();
     }
 
     /// Generate animation steps for a file change
@@ -843,6 +1081,10 @@ impl AnimationEngine {
     pub fn tick(&mut self) -> bool {
         self.update_cursor_blink();
 
+        if self.paused {
+            return true;
+        }
+
         if self.is_paused() {
             return true;
         }
@@ -923,6 +1165,7 @@ impl AnimationEngine {
     }
 
     fn execute_step(&mut self, step: AnimationStep) {
+        let step_clone = step.clone();
         // Calculate delay for next step with randomization for typing steps
         let mut rng = rand::rng();
         self.next_step_delay = match &step {
@@ -1071,6 +1314,8 @@ impl AnimationEngine {
                 self.active_pane = ActivePane::Terminal;
             }
         }
+
+        self.handle_step_checkpoint(&step_clone);
 
         // Update scroll to keep cursor centered
         self.update_scroll();

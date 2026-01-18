@@ -91,6 +91,15 @@ pub struct Args {
     )]
     pub loop_playback: Option<bool>,
 
+    #[arg(
+        long = "playback-controls",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable manual playback controls (j=prev, k=play/pause, l=next)"
+    )]
+    pub playback_controls: Option<bool>,
+
     #[arg(long, help = "Display third-party license information")]
     pub license: bool,
 
@@ -187,6 +196,10 @@ pub enum Commands {
         #[arg(long = "speed-rule", value_name = "PATTERN:MS", action = clap::ArgAction::Append,
               help = "Set typing speed for files matching pattern (e.g., '*.java:50')")]
         speed_rule: Vec<String>,
+
+        #[arg(long = "playback-controls", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL",
+              help = "Enable manual playback controls (j=prev, k=play/pause, l=next)")]
+        playback_controls: Option<bool>,
     },
 }
 
@@ -284,6 +297,7 @@ fn main() -> Result<()> {
                 loop_playback,
                 ignore,
                 speed_rule,
+                playback_controls,
             } => {
                 let repo_path = args.validate()?;
                 let repo = GitRepository::open(&repo_path)?;
@@ -311,6 +325,7 @@ fn main() -> Result<()> {
                 let speed = speed.unwrap_or(config.speed);
                 let background = background.unwrap_or(config.background);
                 let loop_playback = loop_playback.unwrap_or(false);
+                let manual_controls = playback_controls.unwrap_or(config.playback_controls);
 
                 let mut theme = Theme::load(theme_name)?;
                 if !background {
@@ -339,6 +354,7 @@ fn main() -> Result<()> {
                     None,
                     false,
                     speed_rules,
+                    manual_controls,
                 );
                 ui.set_diff_mode(Some(mode));
                 ui.load_commit(metadata);
@@ -407,6 +423,7 @@ fn main() -> Result<()> {
     }
 
     let loop_playback = args.loop_playback.unwrap_or(config.loop_playback);
+    let manual_controls = args.playback_controls.unwrap_or(config.playback_controls);
     let mut theme = Theme::load(theme_name)?;
 
     // Apply transparent background if requested
@@ -467,6 +484,7 @@ fn main() -> Result<()> {
         args.commit.clone(),
         is_range_mode,
         speed_rules,
+        manual_controls,
     );
     ui.load_commit(metadata);
     ui.run()?;
