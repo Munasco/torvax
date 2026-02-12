@@ -146,6 +146,31 @@ gitlogue theme set dracula
 gitlogue --commit HEAD~5 --author "john" --theme nord --speed 15 --ignore "*.ipynb"
 ```
 
+## Key Bindings
+
+### Playback
+
+| Key | Action |
+|-----|--------|
+| `Space` | Toggle play / pause |
+| `h` | Step one line backward |
+| `l` | Step one line forward |
+| `H` (Shift+h) | Step one change backward |
+| `L` (Shift+l) | Step one change forward |
+| `p` | Previous commit |
+| `n` | Next commit |
+| `Esc` | Open menu |
+| `q` / `Ctrl+c` | Quit |
+
+### Menu
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Move selection down |
+| `k` / `↑` | Move selection up |
+| `Enter` | Select item |
+| `Esc` | Close menu |
+
 ## Configuration
 
 gitlogue can be configured via `~/.config/gitlogue/config.toml`.  
