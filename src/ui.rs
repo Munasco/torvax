@@ -29,6 +29,9 @@ use crate::PlaybackOrder;
 enum UIState {
     Playing,
     WaitingForNext { resume_at: Instant },
+    Menu,
+    KeyBindings,
+    About,
     Finished,
 }
 
@@ -55,10 +58,11 @@ pub struct UI<'a> {
     commit_spec: Option<String>,
     is_range_mode: bool,
     diff_mode: Option<DiffMode>,
-    manual_controls: bool,
     playback_state: PlaybackState,
     history: Vec<CommitMetadata>,
     history_index: Option<usize>,
+    menu_index: usize,
+    prev_state: Option<Box<UIState>>,
 }
 
 impl<'a> UI<'a> {
@@ -73,7 +77,6 @@ impl<'a> UI<'a> {
         commit_spec: Option<String>,
         is_range_mode: bool,
         speed_rules: Vec<SpeedRule>,
-        manual_controls: bool,
     ) -> Self {
         let should_exit = Arc::new(AtomicBool::new(false));
         Self::setup_signal_handler(should_exit.clone());
@@ -97,16 +100,35 @@ impl<'a> UI<'a> {
             commit_spec,
             is_range_mode,
             diff_mode: None,
-            manual_controls,
             playback_state: PlaybackState::Playing,
             history: Vec::new(),
             history_index: None,
+            menu_index: 0,
+            prev_state: None,
         }
     }
 
     /// Sets the diff mode for working tree diff playback.
     pub fn set_diff_mode(&mut self, mode: Option<DiffMode>) {
         self.diff_mode = mode;
+    }
+
+    fn open_menu(&mut self) {
+        self.prev_state = Some(Box::new(self.state.clone()));
+        self.menu_index = 0;
+        self.state = UIState::Menu;
+        self.engine.pause();
+    }
+
+    fn close_menu(&mut self) {
+        if let Some(prev) = self.prev_state.take() {
+            self.state = *prev;
+        } else {
+            self.state = UIState::Playing;
+        }
+        if self.playback_state == PlaybackState::Playing {
+            self.engine.resume();
+        }
     }
 
     fn setup_signal_handler(should_exit: Arc<AtomicBool>) {
@@ -136,20 +158,14 @@ impl<'a> UI<'a> {
             self.record_history(&metadata);
         }
         self.engine.load_commit(&metadata);
-        if self.manual_controls {
-            match self.playback_state {
-                PlaybackState::Playing => self.engine.resume(),
-                PlaybackState::Paused => self.engine.pause(),
-            }
+        match self.playback_state {
+            PlaybackState::Playing => self.engine.resume(),
+            PlaybackState::Paused => self.engine.pause(),
         }
         self.state = UIState::Playing;
     }
 
     fn record_history(&mut self, metadata: &CommitMetadata) {
-        if !self.manual_controls {
-            return;
-        }
-
         if let Some(index) = self.history_index {
             if index + 1 < self.history.len() {
                 self.history.truncate(index + 1);
@@ -163,10 +179,6 @@ impl<'a> UI<'a> {
     }
 
     fn play_history_commit(&mut self, index: usize) -> bool {
-        if !self.manual_controls {
-            return false;
-        }
-
         if let Some(metadata) = self.history.get(index).cloned() {
             self.history_index = Some(index);
             self.play_commit(metadata, false);
@@ -176,26 +188,7 @@ impl<'a> UI<'a> {
         false
     }
 
-    fn playback_status_line(&self) -> Option<String> {
-        if !self.manual_controls {
-            return None;
-        }
-
-        let state_label = match self.playback_state {
-            PlaybackState::Playing => "Playing",
-            PlaybackState::Paused => "Paused",
-        };
-
-        Some(format!(
-            "manual controls ({state_label}): Ctrl+j=prev commit  Ctrl+l=next commit  j=prev line  l=next line  J=prev change  L=next change  k=play/pause"
-        ))
-    }
-
     fn toggle_pause(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
-
         match self.playback_state {
             PlaybackState::Playing => {
                 self.playback_state = PlaybackState::Paused;
@@ -209,10 +202,6 @@ impl<'a> UI<'a> {
     }
 
     fn ensure_manual_pause(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
-
         if self.playback_state != PlaybackState::Paused {
             self.playback_state = PlaybackState::Paused;
             self.engine.pause();
@@ -220,42 +209,26 @@ impl<'a> UI<'a> {
     }
 
     fn step_line(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
         self.ensure_manual_pause();
         let _ = self.engine.manual_step(StepMode::Line);
     }
 
     fn step_change(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
         self.ensure_manual_pause();
         let _ = self.engine.manual_step(StepMode::Change);
     }
 
     fn step_line_back(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
         self.ensure_manual_pause();
         let _ = self.engine.restore_line_checkpoint();
     }
 
     fn step_change_back(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
         self.ensure_manual_pause();
         let _ = self.engine.restore_change_checkpoint();
     }
 
     fn handle_prev(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
-
         if let Some(index) = self.history_index {
             if index > 0 {
                 let target = index - 1;
@@ -265,10 +238,6 @@ impl<'a> UI<'a> {
     }
 
     fn handle_next(&mut self) {
-        if !self.manual_controls {
-            return;
-        }
-
         if let Some(index) = self.history_index {
             if index + 1 < self.history.len() {
                 let target = index + 1;
@@ -403,29 +372,50 @@ impl<'a> UI<'a> {
             // Poll for keyboard events at frame rate
             if event::poll(std::time::Duration::from_millis(8))? {
                 if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            self.state = UIState::Finished;
-                        }
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.state = UIState::Finished;
-                        }
-                        KeyCode::Char(ch) => {
-                            if self.manual_controls {
-                                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                                match (ctrl, ch) {
-                                    (true, 'j' | 'J') => self.handle_prev(),
-                                    (true, 'l' | 'L') => self.handle_next(),
-                                    (false, 'l') => self.step_line(),
-                                    (false, 'j') => self.step_line_back(),
-                                    (false, 'L') => self.step_change(),
-                                    (false, 'J') => self.step_change_back(),
-                                    (_, 'k' | 'K') => self.toggle_pause(),
-                                    _ => {}
-                                }
+                    match &self.state {
+                        UIState::Menu => match key.code {
+                            KeyCode::Esc => self.close_menu(),
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                self.menu_index = self.menu_index.saturating_sub(1);
                             }
-                        }
-                        _ => {}
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                self.menu_index = (self.menu_index + 1).min(2);
+                            }
+                            KeyCode::Enter => match self.menu_index {
+                                0 => self.state = UIState::KeyBindings,
+                                1 => self.state = UIState::About,
+                                _ => self.state = UIState::Finished,
+                            },
+                            _ => {}
+                        },
+                        UIState::KeyBindings | UIState::About => match key.code {
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                                self.state = UIState::Menu;
+                            }
+                            _ => {}
+                        },
+                        _ => match key.code {
+                            KeyCode::Esc => self.open_menu(),
+                            KeyCode::Char('q') => {
+                                self.state = UIState::Finished;
+                            }
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                self.state = UIState::Finished;
+                            }
+                            KeyCode::Char(' ') => {
+                                self.toggle_pause();
+                            }
+                            KeyCode::Char(ch) => match ch {
+                                'h' => self.step_line_back(),
+                                'l' => self.step_line(),
+                                'H' => self.step_change_back(),
+                                'L' => self.step_change(),
+                                'p' => self.handle_prev(),
+                                'n' => self.handle_next(),
+                                _ => {}
+                            },
+                            _ => {}
+                        },
                     }
                 }
             }
@@ -435,28 +425,26 @@ impl<'a> UI<'a> {
                 UIState::Playing => {
                     if self.engine.is_finished() {
                         if self.repo.is_some() {
-                            // Schedule next commit
-                            // Wait time proportional to speed (100x the typing speed)
                             self.state = UIState::WaitingForNext {
                                 resume_at: Instant::now()
                                     + Duration::from_millis(self.speed_ms * 100),
                             };
                         } else {
-                            // Single commit mode without loop - quit
                             self.state = UIState::Finished;
                         }
                     }
                 }
                 UIState::WaitingForNext { resume_at } => {
                     if Instant::now() >= resume_at {
-                        if self.manual_controls
-                            && matches!(self.playback_state, PlaybackState::Paused)
-                        {
+                        if matches!(self.playback_state, PlaybackState::Paused) {
                             continue;
                         }
 
                         self.advance_to_next_commit();
                     }
+                }
+                UIState::Menu | UIState::KeyBindings | UIState::About => {
+                    // Paused while in menu/dialog
                 }
                 UIState::Finished => {
                     break;
@@ -528,13 +516,11 @@ impl<'a> UI<'a> {
         f.render_widget(left_sep, left_layout[1]);
 
         // Render commit info
-        let playback_status = self.playback_status_line();
         self.status_bar.render(
             f,
             left_layout[2],
             self.engine.current_metadata(),
             &self.theme,
-            playback_status.as_deref(),
         );
 
         // Render editor
@@ -599,6 +585,123 @@ impl<'a> UI<'a> {
 
             let dialog = Paragraph::new(dialog_text).block(block);
             f.render_widget(dialog, dialog_area);
+        }
+
+        // Render menu / key bindings / about overlays
+        match self.state {
+            UIState::Menu => self.render_menu(f, size),
+            UIState::KeyBindings => self.render_keybindings(f, size),
+            UIState::About => self.render_about(f, size),
+            _ => {}
+        }
+    }
+
+    fn render_menu(&self, f: &mut Frame, size: Rect) {
+        let items = ["Key Bindings", "About", "Exit"];
+        let lines: Vec<Line> = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                let marker = if i == self.menu_index { "> " } else { "  " };
+                let style = if i == self.menu_index {
+                    Style::default().fg(self.theme.file_tree_current_file_fg)
+                } else {
+                    Style::default().fg(self.theme.status_message)
+                };
+                Line::from(Span::styled(format!("{marker}{item}"), style))
+            })
+            .collect();
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Menu (Esc to close) ")
+            .padding(Padding::new(2, 2, 1, 1))
+            .style(
+                Style::default()
+                    .fg(self.theme.file_tree_current_file_fg)
+                    .bg(self.theme.editor_cursor_line_bg),
+            );
+
+        let dialog_width = 30u16;
+        let dialog_height = (items.len() as u16) + 4; // borders + padding
+        let area = Self::centered_rect(size, dialog_width, dialog_height);
+
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    fn render_keybindings(&self, f: &mut Frame, size: Rect) {
+        let lines = vec![
+            Line::from(Span::styled(
+                "General",
+                Style::default().fg(self.theme.file_tree_current_file_fg),
+            )),
+            Line::from("  Esc     Menu"),
+            Line::from("  q       Quit"),
+            Line::from("  Ctrl+c  Quit"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Playback Controls",
+                Style::default().fg(self.theme.file_tree_current_file_fg),
+            )),
+            Line::from("  Space   Play / Pause"),
+            Line::from("  h / l   Step line back / forward"),
+            Line::from("  H / L   Step change back / forward"),
+            Line::from("  p / n   Previous / Next commit"),
+        ];
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Key Bindings (Esc to close) ")
+            .padding(Padding::new(2, 2, 1, 1))
+            .style(
+                Style::default()
+                    .fg(self.theme.status_message)
+                    .bg(self.theme.editor_cursor_line_bg),
+            );
+
+        let dialog_height = (lines.len() as u16) + 4;
+        let area = Self::centered_rect(size, 44, dialog_height);
+
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    fn render_about(&self, f: &mut Frame, size: Rect) {
+        let version = env!("CARGO_PKG_VERSION");
+        let lines = vec![
+            Line::from(Span::styled(
+                "gitlogue",
+                Style::default().fg(self.theme.file_tree_current_file_fg),
+            )),
+            Line::from(format!("Version {version}")),
+            Line::from(""),
+            Line::from("A cinematic Git commit replay tool"),
+            Line::from("for the terminal."),
+            Line::from(""),
+            Line::from("https://github.com/unhappychoice/gitlogue"),
+        ];
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" About (Esc to close) ")
+            .padding(Padding::new(2, 2, 1, 1))
+            .style(
+                Style::default()
+                    .fg(self.theme.status_message)
+                    .bg(self.theme.editor_cursor_line_bg),
+            );
+
+        let dialog_height = (lines.len() as u16) + 4;
+        let area = Self::centered_rect(size, 48, dialog_height);
+
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
+        Rect {
+            x: outer.x + (outer.width.saturating_sub(width)) / 2,
+            y: outer.y + (outer.height.saturating_sub(height)) / 2,
+            width: width.min(outer.width),
+            height: height.min(outer.height),
         }
     }
 }

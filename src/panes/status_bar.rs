@@ -19,13 +19,12 @@ impl StatusBarPane {
         area: Rect,
         metadata: Option<&CommitMetadata>,
         theme: &Theme,
-        playback_status: Option<&str>,
     ) {
         let block = Block::default()
             .style(Style::default().bg(theme.background_left))
             .padding(Padding::vertical(1));
 
-        let mut status_lines = if let Some(meta) = metadata {
+        let status_lines = if let Some(meta) = metadata {
             let is_working_tree = meta.hash == "working-tree";
             let hash_display = if is_working_tree {
                 "working"
@@ -70,16 +69,6 @@ impl StatusBarPane {
                 Style::default().fg(theme.status_no_commit),
             )])]
         };
-
-        if let Some(status) = playback_status {
-            status_lines.insert(
-                0,
-                Line::from(vec![Span::styled(
-                    status,
-                    Style::default().fg(theme.status_message),
-                )]),
-            );
-        }
 
         let content = SelectableParagraph::new(status_lines)
             .block(block)

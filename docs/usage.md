@@ -217,25 +217,6 @@ This is especially useful when viewing a specific commit or commit range and you
 - Desktop ricing and ambience
 - Educational replays of feature development
 
-### `--playback-controls[=BOOL]`
-
-Enable manual playback controls. When active:
-
-- `Ctrl+j` jumps to the previous commit in history
-- `Ctrl+l` advances to the next commit
-- `j` steps to the previous line chunk
-- `l` steps to the next line chunk
-- `J` jumps to the previous change/file
-- `L` jumps to the next change/file
-- `k` toggles play/pause
-
-```bash
-gitlogue --playback-controls --order asc   # Enable controls while replaying sequentially
-gitlogue --playback-controls=false         # Explicitly disable controls
-```
-
-Manual controls are most useful with sequential orders (`asc`/`desc`) or commit ranges where you want to narrate each change at your own pace while stepping line-by-line.
-
 ### `--help`
 
 Display help information:
@@ -350,7 +331,6 @@ gitlogue diff --unstaged
 | `-t, --theme <NAME>` | Theme to use |
 | `--background[=BOOL]` | Show background colors (use `--background=false` for transparent) |
 | `--loop[=BOOL]` | Loop the animation continuously |
-| `--playback-controls[=BOOL]` | Enable manual playback controls inside diff mode |
 | `-i, --ignore <PATTERN>` | Ignore files matching pattern (can be specified multiple times) |
 | `--speed-rule <PATTERN:MS>` | Set typing speed for files matching pattern |
 
@@ -381,15 +361,13 @@ gitlogue diff -i "*.lock" -i "dist/**"
 
 While gitlogue is running:
 
-- `Esc` - Quit the application
+- `Esc` - Open menu (Key Bindings / About / Exit)
+- `q` - Quit the application
 - `Ctrl+C` - Quit the application
-- `Ctrl+j` - (with `--playback-controls`) jump to the previous commit
-- `Ctrl+l` - (with `--playback-controls`) jump to the next commit
-- `j` - (with `--playback-controls`) step to the previous line chunk
-- `l` - (with `--playback-controls`) step to the next line chunk
-- `J` - (with `--playback-controls`) jump to the previous change/file
-- `L` - (with `--playback-controls`) jump to the next change/file
-- `k` - (with `--playback-controls`) toggle play/pause
+- `Space` - Play / Pause
+- `h` / `l` - Step line back / forward
+- `H` / `L` - Step change back / forward
+- `p` / `n` - Previous / Next commit
 
 ## Use Cases
 
