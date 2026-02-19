@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::collections::VecDeque;
 use rodio::{Decoder, OutputStream, Sink};
+use async_openai::{Client, config::OpenAIConfig, types::{CreateChatCompletionRequestArgs, ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs, ChatCompletionRequestSystemMessageArgs}};
 
 /// Configuration for voiceover providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,11 +40,29 @@ impl Default for VoiceoverConfig {
     }
 }
 
-/// Audio player that handles voiceover playback
+/// Represents a single voiceover segment with audio data
+#[derive(Debug, Clone)]
+pub struct VoiceoverSegment {
+    pub text: String,
+    pub audio_data: Option<Vec<u8>>,
+    pub file_path: Option<String>,
+    pub trigger_type: VoiceoverTrigger,
+}
+
+/// When to trigger this voiceover segment
+#[derive(Debug, Clone, PartialEq)]
+pub enum VoiceoverTrigger {
+    FileOpen(String),      // Trigger when this file opens
+    CommitStart,           // Trigger at commit start
+    CommitEnd,             // Trigger at commit end
+}
+
+/// Audio player that handles synced voiceover playback
 pub struct AudioPlayer {
     config: VoiceoverConfig,
     _stream: Option<OutputStream>,
-    sink: Option<std::sync::Arc<std::sync::Mutex<Sink>>>,
+    sink: Option<Arc<Mutex<Sink>>>,
+    segment_queue: Arc<Mutex<VecDeque<VoiceoverSegment>>>,
 }
 
 impl AudioPlayer {
@@ -51,6 +72,7 @@ impl AudioPlayer {
                 config,
                 _stream: None,
                 sink: None,
+                segment_queue: Arc::new(Mutex::new(VecDeque::new())),
             });
         }
 
@@ -59,61 +81,35 @@ impl AudioPlayer {
         let sink = Sink::try_new(&stream_handle)
             .context("Failed to create audio sink")?;
 
+        // Make sure sink is playing (not paused)
+        sink.play();
+
         Ok(Self {
             config,
             _stream: Some(_stream),
-            sink: Some(std::sync::Arc::new(std::sync::Mutex::new(sink))),
+            sink: Some(Arc::new(Mutex::new(sink))),
+            segment_queue: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 
-    /// Generate narration text from commit metadata
-    #[allow(dead_code)]
-    pub fn generate_narration(
-        &self,
-        commit_hash: &str,
-        author: &str,
-        message: &str,
-        files_changed: usize,
-        insertions: usize,
-        deletions: usize,
-    ) -> String {
-        let commit_short = &commit_hash[..7.min(commit_hash.len())];
-        
-        let file_text = if files_changed == 1 {
-            "file"
-        } else {
-            "files"
-        };
-
-        format!(
-            "Reviewing commit {} by {}. {}. This commit modified {} {}, adding {} lines and removing {} lines.",
-            commit_short,
-            author,
-            message,
-            files_changed,
-            file_text,
-            insertions,
-            deletions
-        )
-    }
-
-    /// Play narration for a commit asynchronously in a background thread
-    pub fn play_commit_narration_async(
+    /// Generate voiceover segments for a commit (one per file)
+    pub fn generate_voiceover_segments(
         &self,
         commit_hash: String,
         author: String,
         message: String,
         file_changes: Vec<(String, String)>, // (filename, diff_text)
-    ) {
+    ) -> Vec<VoiceoverSegment> {
         if !self.config.enabled || self.config.api_key.is_none() {
-            return;
+            return Vec::new();
         }
 
         let config = self.config.clone();
+        let segment_queue = self.segment_queue.clone();
         let sink = self.sink.clone();
 
+        // Spawn background thread to generate all segments
         thread::spawn(move || {
-            // Create runtime in the spawned thread to avoid blocking the UI
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
                 Err(e) => {
@@ -121,68 +117,207 @@ impl AudioPlayer {
                     return;
                 }
             };
-            
+
             rt.block_on(async {
-                // Generate narration text (either via LLM or simple summary)
-                let narration = if config.use_llm_explanations && config.openai_api_key.is_some() {
-                    match Self::generate_llm_explanation(&config, &commit_hash, &author, &message, &file_changes).await {
-                        Ok(explanation) => explanation,
-                        Err(e) => {
-                            eprintln!("Failed to generate LLM explanation: {}. Falling back to simple narration.", e);
-                            Self::generate_simple_narration(&commit_hash, &author, &message, file_changes.len())
-                        }
-                    }
-                } else {
-                    Self::generate_simple_narration(&commit_hash, &author, &message, file_changes.len())
-                };
-                
-                // Synthesize speech from narration
-                match Self::synthesize_speech_from_text(&config, &narration).await {
-                    Ok(audio_data) => {
-                        if let Some(sink_arc) = sink {
-                            if let Ok(sink_guard) = sink_arc.lock() {
-                                let cursor = std::io::Cursor::new(audio_data);
-                                if let Ok(source) = Decoder::new(cursor) {
-                                    sink_guard.append(source);
-                                }
+                let mut segments = Vec::new();
+
+                // Generate commit intro segment
+                let intro_text = format!(
+                    "Reviewing commit by {}. {}",
+                    author,
+                    message
+                );
+
+                eprintln!("[AUDIO] Generating intro voiceover...");
+                if let Ok(audio_data) = Self::synthesize_speech_from_text(&config, &intro_text).await {
+                    eprintln!("[AUDIO] Intro voiceover generated ({} bytes)", audio_data.len());
+
+                    // Play intro immediately (don't wait for queue)
+                    if let Some(sink_arc) = &sink {
+                        if let Ok(sink_guard) = sink_arc.lock() {
+                            let cursor = std::io::Cursor::new(audio_data.clone());
+                            if let Ok(source) = Decoder::new(cursor) {
+                                sink_guard.append(source);
+                                sink_guard.play();
+                                eprintln!("[AUDIO] Intro playing immediately");
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Voiceover error: {}", e);
+
+                    segments.push(VoiceoverSegment {
+                        text: intro_text.clone(),
+                        audio_data: Some(audio_data),
+                        file_path: None,
+                        trigger_type: VoiceoverTrigger::CommitStart,
+                    });
+                } else {
+                    eprintln!("[AUDIO] Failed to generate intro voiceover");
+                }
+
+                // Generate per-file commentary segments with rate limiting
+                eprintln!("[AUDIO] Generating {} file voiceovers...", file_changes.len());
+                for (i, (filename, diff)) in file_changes.iter().enumerate() {
+                    // Add delay between API calls to avoid rate limits
+                    if i > 0 {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     }
+
+                    eprintln!("[AUDIO] Processing file: {}", filename);
+                    let narration = if config.use_llm_explanations && config.openai_api_key.is_some() {
+                        match Self::generate_file_explanation_with_retry(&config, &commit_hash, filename, diff).await {
+                            Ok(explanation) => {
+                                eprintln!("[AUDIO] LLM explanation: {}", explanation);
+                                explanation
+                            }
+                            Err(e) => {
+                                eprintln!("[AUDIO] Failed to generate LLM explanation for {}: {}", filename, e);
+                                format!("Now reviewing changes in {}", filename)
+                            }
+                        }
+                    } else {
+                        format!("Now reviewing changes in {}", filename)
+                    };
+
+                    // Add delay before TTS call
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+                    match Self::synthesize_speech_from_text(&config, &narration).await {
+                        Ok(audio_data) => {
+                            eprintln!("[AUDIO] Generated audio for {} ({} bytes)", filename, audio_data.len());
+
+                            // Store segment in queue for potential triggers
+                            segments.push(VoiceoverSegment {
+                                text: narration.clone(),
+                                audio_data: Some(audio_data.clone()),
+                                file_path: Some(filename.clone()),
+                                trigger_type: VoiceoverTrigger::FileOpen(filename.clone()),
+                            });
+
+                            // Also play immediately when ready (don't wait for trigger)
+                            if let Some(sink_arc) = &sink {
+                                if let Ok(sink_guard) = sink_arc.lock() {
+                                    let cursor = std::io::Cursor::new(audio_data);
+                                    if let Ok(source) = Decoder::new(cursor) {
+                                        sink_guard.append(source);
+                                        sink_guard.play();
+                                        eprintln!("[AUDIO] Playing file voiceover immediately: {}", filename);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[AUDIO] Failed to synthesize speech for {}: {}", filename, e);
+                        }
+                    }
+                }
+
+                eprintln!("[AUDIO] Generated {} total voiceover segments", segments.len());
+
+                // Store segments in queue
+                if let Ok(mut queue) = segment_queue.lock() {
+                    *queue = segments.into();
                 }
             });
         });
+
+        Vec::new() // Segments will be populated asynchronously
     }
 
-    /// Generate a simple narration without LLM
-    fn generate_simple_narration(
-        commit_hash: &str,
-        author: &str,
-        message: &str,
-        files_changed: usize,
-    ) -> String {
-        let commit_short = &commit_hash[..7.min(commit_hash.len())];
-        let file_text = if files_changed == 1 { "file" } else { "files" };
-        
-        format!(
-            "Reviewing commit {} by {}. {}. This commit modified {} {}.",
-            commit_short,
-            author,
-            message,
-            files_changed,
-            file_text
-        )
+    /// Trigger voiceover for a specific event
+    pub fn trigger_voiceover(&self, trigger_type: VoiceoverTrigger) {
+        if !self.config.enabled || self.sink.is_none() {
+            eprintln!("[AUDIO] Trigger skipped (enabled: {}, sink: {})",
+                self.config.enabled,
+                self.sink.is_some());
+            return;
+        }
+
+        eprintln!("[AUDIO] Triggering voiceover for: {:?}", trigger_type);
+
+        let segment_queue = self.segment_queue.clone();
+        let sink = self.sink.clone();
+
+        thread::spawn(move || {
+            // Find matching segment
+            let segment = {
+                if let Ok(mut queue) = segment_queue.lock() {
+                    eprintln!("[AUDIO] Queue has {} segments", queue.len());
+                    let pos = queue.iter().position(|s| s.trigger_type == trigger_type);
+                    if let Some(index) = pos {
+                        eprintln!("[AUDIO] Found matching segment at index {}", index);
+                        Some(queue.remove(index).unwrap())
+                    } else {
+                        eprintln!("[AUDIO] No matching segment found for trigger");
+                        None
+                    }
+                } else {
+                    eprintln!("[AUDIO] Failed to lock queue");
+                    None
+                }
+            };
+
+            if let Some(seg) = segment {
+                eprintln!("[AUDIO] Playing segment: {}", seg.text);
+                if let Some(audio_data) = seg.audio_data {
+                    if let Some(sink_arc) = sink {
+                        if let Ok(sink_guard) = sink_arc.lock() {
+                            let cursor = std::io::Cursor::new(audio_data);
+                            if let Ok(source) = Decoder::new(cursor) {
+                                sink_guard.append(source);
+                                sink_guard.play(); // Make sure sink is playing
+                                eprintln!("[AUDIO] Audio appended to sink and playing");
+                            } else {
+                                eprintln!("[AUDIO] Failed to decode audio");
+                            }
+                        } else {
+                            eprintln!("[AUDIO] Failed to lock sink");
+                        }
+                    }
+                } else {
+                    eprintln!("[AUDIO] Segment has no audio data");
+                }
+            }
+        });
     }
 
-    /// Generate an intelligent explanation using OpenAI
-    async fn generate_llm_explanation(
+    /// Generate explanation with retry logic for rate limits
+    async fn generate_file_explanation_with_retry(
         config: &VoiceoverConfig,
         commit_hash: &str,
-        author: &str,
-        message: &str,
-        file_changes: &[(String, String)],
+        filename: &str,
+        diff: &str,
+    ) -> Result<String> {
+        let max_retries = 3;
+        let mut retry_delay = 1000; // Start with 1 second
+
+        for attempt in 0..max_retries {
+            match Self::generate_file_explanation(config, commit_hash, filename, diff).await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    let error_msg = format!("{}", e);
+                    if error_msg.contains("rate_limit") || error_msg.contains("429") {
+                        if attempt < max_retries - 1 {
+                            eprintln!("Rate limit hit for {}. Retrying in {}ms... (attempt {}/{})",
+                                filename, retry_delay, attempt + 1, max_retries);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay)).await;
+                            retry_delay *= 2; // Exponential backoff
+                            continue;
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        anyhow::bail!("Max retries exceeded")
+    }
+
+    /// Generate explanation for a specific file change using LLM
+    async fn generate_file_explanation(
+        config: &VoiceoverConfig,
+        commit_hash: &str,
+        filename: &str,
+        diff: &str,
     ) -> Result<String> {
         let api_key = config
             .openai_api_key
@@ -192,66 +327,54 @@ impl AudioPlayer {
         let commit_short = &commit_hash[..7.min(commit_hash.len())];
 
         // Build context for the LLM
-        let mut context = format!(
-            "You are reviewing a git commit. Provide a clear, conversational explanation of what this code change does and why it matters. Keep it concise (2-3 sentences max).\n\n\
-            Commit: {}\n\
-            Author: {}\n\
-            Message: {}\n\n\
-            Files changed:\n",
-            commit_short, author, message
+        let context = format!(
+            "You're narrating this file as it opens and code types out. \
+            Describe what's happening in this file change like you're walking someone through it live. \
+            Use natural spoken English - imagine you're doing a voiceover for a tutorial video.\n\n\
+            File: {}\n\
+            Commit: {}\n\n\
+            Code changes:\n{}",
+            filename, commit_short,
+            diff.lines().take(30).collect::<Vec<_>>().join("\n")
         );
 
-        // Include file diffs (limited to avoid token limits)
-        for (filename, diff) in file_changes.iter().take(5) {
-            context.push_str(&format!("\n--- {} ---\n", filename));
-            // Limit diff size
-            let diff_lines: Vec<&str> = diff.lines().take(50).collect();
-            context.push_str(&diff_lines.join("\n"));
-            context.push('\n');
-        }
+        // Use official OpenAI client
+        let openai_config = OpenAIConfig::new().with_api_key(api_key);
+        let client = Client::with_config(openai_config);
 
-        if file_changes.len() > 5 {
-            context.push_str(&format!("\n... and {} more files\n", file_changes.len() - 5));
-        }
+        let request = CreateChatCompletionRequestArgs::default()
+            .model("gpt-5.2")
+            .messages(vec![
+                ChatCompletionRequestMessage::System(
+                    ChatCompletionRequestSystemMessageArgs::default()
+                        .content("You are narrating a live code walkthrough for audio voiceover. \
+                                 Talk like you're teaching someone while watching code being typed in real-time. \
+                                 Be natural, conversational, and use spoken language - NO code syntax, NO HTML tags, NO technical jargon unless it sounds natural spoken aloud. \
+                                 Keep it to 1-2 sentences max. \
+                                 Focus on WHAT changed and WHY it matters in plain English. \
+                                 Examples: Say 'heading element' not 'h1 tag', say 'function' not 'func', say 'we're adding' not 'added'.")
+                        .build()?
+                ),
+                ChatCompletionRequestMessage::User(
+                    ChatCompletionRequestUserMessageArgs::default()
+                        .content(context)
+                        .build()?
+                ),
+            ])
+            .temperature(0.7)
+            .build()?;
 
-        // Call OpenAI API
-        let client = reqwest::Client::new();
         let response = client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "model": "gpt-3.5-turbo",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a code reviewer providing clear, conversational explanations of git commits. Explain what the code does and why, not just what files changed. Be concise and use natural language suitable for text-to-speech."
-                    },
-                    {
-                        "role": "user",
-                        "content": context
-                    }
-                ],
-                "max_tokens": 200,
-                "temperature": 0.7
-            }))
-            .send()
+            .chat()
+            .create(request)
             .await
-            .context("Failed to send request to OpenAI API")?;
+            .context("Failed to call OpenAI API")?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("OpenAI API error: {}", error_text);
-        }
-
-        let response_json: serde_json::Value = response
-            .json()
-            .await
-            .context("Failed to parse OpenAI response")?;
-
-        let explanation = response_json["choices"][0]["message"]["content"]
-            .as_str()
-            .context("Failed to extract explanation from OpenAI response")?
+        let explanation = response
+            .choices
+            .first()
+            .and_then(|choice| choice.message.content.as_ref())
+            .context("No response from OpenAI")?
             .trim()
             .to_string();
 
@@ -283,7 +406,7 @@ impl AudioPlayer {
             .model_id
             .as_ref()
             .map(|s| s.as_str())
-            .unwrap_or("eleven_monolingual_v1");
+            .unwrap_or("eleven_flash_v2_5");
 
         let url = format!(
             "https://api.elevenlabs.io/v1/text-to-speech/{}",
@@ -380,4 +503,3 @@ impl AudioPlayer {
         false
     }
 }
-

@@ -64,7 +64,7 @@ pub struct UI<'a> {
     history_index: Option<usize>,
     menu_index: usize,
     prev_state: Option<Box<UIState>>,
-    audio_player: Option<AudioPlayer>,
+    audio_player: Option<Arc<AudioPlayer>>,
 }
 
 impl<'a> UI<'a> {
@@ -79,13 +79,18 @@ impl<'a> UI<'a> {
         commit_spec: Option<String>,
         is_range_mode: bool,
         speed_rules: Vec<SpeedRule>,
-        audio_player: Option<AudioPlayer>,
+        audio_player: Option<Arc<AudioPlayer>>,
     ) -> Self {
         let should_exit = Arc::new(AtomicBool::new(false));
         Self::setup_signal_handler(should_exit.clone());
 
         let mut engine = AnimationEngine::new(speed_ms);
         engine.set_speed_rules(speed_rules);
+
+        // Pass audio player to animation engine for synced voiceovers
+        if let Some(ref player) = audio_player {
+            engine.set_audio_player(Arc::clone(player));
+        }
 
         Self {
             state: UIState::Playing,
@@ -166,7 +171,7 @@ impl<'a> UI<'a> {
             self.record_history(&metadata);
         }
         
-        // Trigger voiceover if enabled
+        // Generate synced voiceover segments if enabled
         if let Some(audio_player) = &self.audio_player {
             // Build file changes with diffs for LLM
             let file_changes: Vec<(String, String)> = metadata.changes.iter()
@@ -176,8 +181,10 @@ impl<'a> UI<'a> {
                     (change.path.clone(), diff)
                 })
                 .collect();
-            
-            audio_player.play_commit_narration_async(
+
+            // Generate all voiceover segments (intro + per-file commentary)
+            // Intro will play immediately from within the generation thread
+            audio_player.generate_voiceover_segments(
                 metadata.hash.clone(),
                 metadata.author.clone(),
                 metadata.message.clone(),

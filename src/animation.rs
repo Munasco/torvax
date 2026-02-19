@@ -307,6 +307,8 @@ pub struct AnimationEngine {
     paused: bool,
     line_checkpoints: VecDeque<ManualCheckpoint>,
     change_checkpoints: VecDeque<ManualCheckpoint>,
+    /// Audio player for synced voiceovers
+    audio_player: Option<std::sync::Arc<crate::audio::AudioPlayer>>,
 }
 
 impl AnimationEngine {
@@ -346,7 +348,13 @@ impl AnimationEngine {
             paused: false,
             line_checkpoints: VecDeque::new(),
             change_checkpoints: VecDeque::new(),
+            audio_player: None,
         }
+    }
+
+    /// Set the audio player for synced voiceovers
+    pub fn set_audio_player(&mut self, player: std::sync::Arc<crate::audio::AudioPlayer>) {
+        self.audio_player = Some(player);
     }
 
     /// Pause the animation playback.
@@ -1258,6 +1266,11 @@ impl AnimationEngine {
                 self.current_file_index = file_index;
                 self.current_file_path = Some(path.clone());
                 self.buffer = EditorBuffer::from_content(&old_content);
+
+                // Trigger voiceover for file open
+                if let Some(audio_player) = &self.audio_player {
+                    audio_player.trigger_voiceover(crate::audio::VoiceoverTrigger::FileOpen(path.clone()));
+                }
 
                 // Update typing speed based on file-specific rules
                 self.speed_ms = self.get_speed_for_file(&path);

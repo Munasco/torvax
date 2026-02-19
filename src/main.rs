@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use git::{DiffMode, GitRepository};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use theme::Theme;
 use ui::UI;
 
@@ -261,7 +262,7 @@ impl Args {
 }
 
 /// Create audio player from config and CLI arguments
-fn create_audio_player(config: &Config, args: &Args) -> Result<Option<AudioPlayer>> {
+fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioPlayer>>> {
     let mut voiceover_config = config.voiceover.clone();
     
     // Override with CLI arguments
@@ -314,7 +315,7 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<AudioPlaye
         }
         
         match AudioPlayer::new(voiceover_config) {
-            Ok(player) => Ok(Some(player)),
+            Ok(player) => Ok(Some(Arc::new(player))),
             Err(e) => {
                 eprintln!("Warning: Failed to initialize audio player: {}. Continuing without voiceover.", e);
                 Ok(None)
