@@ -142,12 +142,26 @@ impl AudioPlayer {
                     eprintln!("[AUDIO] Failed to generate intro voiceover");
                 }
 
-                // Generate per-file commentary segments with rate limiting
-                eprintln!("[AUDIO] Generating {} file voiceovers...", file_changes.len());
-                for (i, (filename, diff)) in file_changes.iter().enumerate() {
+                // Limit to top 5 most important files to avoid rate limits
+                let max_files = 5;
+                let important_files: Vec<_> = file_changes.iter()
+                    .filter(|(filename, _)| {
+                        // Skip boring files
+                        !filename.contains("package-lock.json") &&
+                        !filename.contains("yarn.lock") &&
+                        !filename.contains("pnpm-lock.yaml") &&
+                        !filename.ends_with(".lock") &&
+                        !filename.ends_with(".json") // Skip all JSON files for now
+                    })
+                    .take(max_files)
+                    .collect();
+
+                eprintln!("[AUDIO] Generating {} file voiceovers (limited from {})...",
+                    important_files.len(), file_changes.len());
+                for (i, (filename, diff)) in important_files.iter().enumerate() {
                     // Add delay between API calls to avoid rate limits
                     if i > 0 {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
                     }
 
                     eprintln!("[AUDIO] Processing file: {}", filename);
@@ -323,11 +337,10 @@ impl AudioPlayer {
                 ChatCompletionRequestMessage::System(
                     ChatCompletionRequestSystemMessageArgs::default()
                         .content("You are narrating a live code walkthrough for audio voiceover. \
-                                 Talk like you're teaching someone while watching code being typed in real-time. \
-                                 Be natural, conversational, and use spoken language - NO code syntax, NO HTML tags, NO technical jargon unless it sounds natural spoken aloud. \
-                                 Keep it to 1-2 sentences max. \
-                                 Focus on WHAT changed and WHY it matters in plain English. \
-                                 Examples: Say 'heading element' not 'h1 tag', say 'function' not 'func', say 'we're adding' not 'added'.")
+                                 CRITICAL: Keep it to EXACTLY ONE SHORT SENTENCE (10-15 words max). \
+                                 Be conversational and natural. Use spoken language - no code syntax, no HTML tags. \
+                                 Focus on the ONE most important change. \
+                                 Examples: 'Adding authentication checks to prevent unauthorized access' or 'Refactoring the payment flow for better error handling'")
                         .build()?
                 ),
                 ChatCompletionRequestMessage::User(
@@ -336,7 +349,7 @@ impl AudioPlayer {
                         .build()?
                 ),
             ])
-            .temperature(0.7)
+            .temperature(0.5)
             .build()?;
 
         let response = client
