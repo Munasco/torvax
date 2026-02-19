@@ -172,6 +172,18 @@ fn extract_repo_name() -> Option<String> {
 }
 
 
+/// Represents a single voiceover chunk for a portion of a diff
+#[derive(Debug, Clone)]
+pub struct DiffChunk {
+    pub chunk_id: usize,
+    pub file_path: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub explanation: String,
+    pub audio_data: Option<Vec<u8>>,
+    pub estimated_duration_secs: f32,
+}
+
 /// Represents a single voiceover segment with audio data
 #[derive(Debug, Clone)]
 pub struct VoiceoverSegment {
@@ -196,6 +208,8 @@ pub struct AudioPlayer {
     _stream: Option<OutputStream>,
     sink: Option<Arc<Mutex<Sink>>>,
     segment_queue: Arc<Mutex<VecDeque<VoiceoverSegment>>>,
+    /// Diff chunks with pre-generated audio (chunk_id -> chunk)
+    chunks: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
 }
 
 impl AudioPlayer {
@@ -206,6 +220,7 @@ impl AudioPlayer {
                 _stream: None,
                 sink: None,
                 segment_queue: Arc::new(Mutex::new(VecDeque::new())),
+                chunks: Arc::new(Mutex::new(std::collections::HashMap::new())),
             });
         }
 
@@ -222,7 +237,148 @@ impl AudioPlayer {
             _stream: Some(_stream),
             sink: Some(Arc::new(Mutex::new(sink))),
             segment_queue: Arc::new(Mutex::new(VecDeque::new())),
+            chunks: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
+    }
+
+    /// Trigger playback of a specific audio chunk
+    pub fn trigger_chunk(&self, chunk_id: usize) {
+        if !self.config.enabled || self.sink.is_none() {
+            return;
+        }
+
+        eprintln!("[AUDIO] Playing chunk {}", chunk_id);
+
+        let chunks = self.chunks.clone();
+        let sink = self.sink.clone();
+
+        thread::spawn(move || {
+            let chunk = {
+                if let Ok(chunks_guard) = chunks.lock() {
+                    chunks_guard.get(&chunk_id).cloned()
+                } else {
+                    None
+                }
+            };
+
+            if let Some(chunk) = chunk {
+                if let Some(audio_data) = chunk.audio_data {
+                    if let Some(sink_arc) = sink {
+                        if let Ok(sink_guard) = sink_arc.lock() {
+                            let cursor = std::io::Cursor::new(audio_data);
+                            if let Ok(source) = Decoder::new(cursor) {
+                                sink_guard.append(source);
+                                sink_guard.play();
+                                eprintln!("[AUDIO] Chunk {} playing (~{:.1}s)", chunk_id, chunk.estimated_duration_secs);
+
+                                // TODO: Signal animation engine when audio finishes
+                                // For now, we'll rely on the estimated duration
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Split a file's diff into explainable chunks using LLM
+    async fn split_diff_into_chunks(
+        config: &VoiceoverConfig,
+        project_context: &ProjectContext,
+        commit_message: &str,
+        filename: &str,
+        diff: &str,
+    ) -> Result<Vec<DiffChunk>> {
+        let api_key = config
+            .gemini_api_key
+            .as_ref()
+            .context("Gemini API key not configured")?;
+
+        let prompt = format!(
+            "You are analyzing a code diff for teaching purposes. Split this diff into logical, explainable chunks.\n\n\
+            PROJECT: {} - {}\n\
+            COMMIT: \"{}\"\n\
+            FILE: {}\n\n\
+            DIFF:\n{}\n\n\
+            INSTRUCTIONS:\n\
+            Break this diff into 2-5 logical chunks where each chunk represents a cohesive change that can be \
+            explained independently. For example:\n\
+            - Chunk 1: Lines 10-25 (adding imports and setup)\n\
+            - Chunk 2: Lines 30-60 (implementing main function)\n\
+            - Chunk 3: Lines 65-80 (adding error handling)\n\n\
+            For EACH chunk, provide:\n\
+            1. start_line: The starting line number\n\
+            2. end_line: The ending line number\n\
+            3. explanation: A 40-60 word explanation of what this chunk does and why (conversational teaching style)\n\n\
+            Return ONLY valid JSON array in this exact format:\n\
+            [\n\
+              {{\"start_line\": 10, \"end_line\": 25, \"explanation\": \"We're adding the imports needed...\"}},\n\
+              {{\"start_line\": 30, \"end_line\": 60, \"explanation\": \"Now we're implementing...\"}}\n\
+            ]\n\n\
+            Return ONLY the JSON array, no other text.",
+            project_context.repo_name,
+            project_context.description,
+            commit_message,
+            filename,
+            diff.lines().take(200).collect::<Vec<_>>().join("\n")
+        );
+
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={}",
+            api_key
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "contents": [{
+                    "parts": [{"text": prompt}]
+                }],
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": 1024
+                }
+            }))
+            .send()
+            .await
+            .context("Failed to send request to Gemini API")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Gemini API error ({}): {}", status, error_text);
+        }
+
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse Gemini response")?;
+
+        let json_text = response_json["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .context("Failed to extract text from Gemini response")?
+            .trim();
+
+        // Parse the JSON array
+        let chunk_data: Vec<serde_json::Value> = serde_json::from_str(json_text)
+            .context("Failed to parse chunks JSON from LLM")?;
+
+        let mut chunks = Vec::new();
+        for (idx, chunk) in chunk_data.iter().enumerate() {
+            chunks.push(DiffChunk {
+                chunk_id: idx,
+                file_path: filename.to_string(),
+                start_line: chunk["start_line"].as_u64().unwrap_or(0) as usize,
+                end_line: chunk["end_line"].as_u64().unwrap_or(0) as usize,
+                explanation: chunk["explanation"].as_str().unwrap_or("").to_string(),
+                audio_data: None,
+                estimated_duration_secs: 0.0,
+            });
+        }
+
+        Ok(chunks)
     }
 
     /// Generate voiceover segments for a commit (one per file)

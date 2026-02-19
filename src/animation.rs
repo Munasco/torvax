@@ -183,6 +183,9 @@ pub enum AnimationStep {
     Pause {
         multiplier: f64,
     },
+    WaitForAudio {
+        chunk_id: usize,  // Which audio chunk to wait for
+    },
     SwitchFile {
         file_index: usize,
         old_content: String,
@@ -309,6 +312,10 @@ pub struct AnimationEngine {
     change_checkpoints: VecDeque<ManualCheckpoint>,
     /// Audio player for synced voiceovers
     audio_player: Option<std::sync::Arc<crate::audio::AudioPlayer>>,
+    /// Currently playing audio chunk ID (for WaitForAudio steps)
+    current_audio_chunk: Option<usize>,
+    /// Flag to indicate audio chunk has finished playing
+    audio_chunk_finished: bool,
 }
 
 impl AnimationEngine {
@@ -349,6 +356,8 @@ impl AnimationEngine {
             line_checkpoints: VecDeque::new(),
             change_checkpoints: VecDeque::new(),
             audio_player: None,
+            current_audio_chunk: None,
+            audio_chunk_finished: false,
         }
     }
 
@@ -1170,6 +1179,11 @@ impl AnimationEngine {
     }
 
     fn can_execute_step(&self, executed_any: bool, accumulated_delay: u64) -> bool {
+        // If waiting for audio, don't proceed until audio finishes
+        if self.current_audio_chunk.is_some() && !self.audio_chunk_finished {
+            return false;
+        }
+
         // First step: check if enough time has elapsed since last step
         if !executed_any {
             return self.last_update.elapsed() >= Duration::from_millis(self.next_step_delay);
@@ -1177,6 +1191,12 @@ impl AnimationEngine {
 
         // Subsequent steps: check if they fit within frame budget
         accumulated_delay + self.next_step_delay <= self.frame_interval_ms
+    }
+
+    /// Signal that the current audio chunk has finished playing
+    pub fn audio_chunk_finished(&mut self) {
+        self.audio_chunk_finished = true;
+        self.current_audio_chunk = None;
     }
 
     fn execute_step(&mut self, step: AnimationStep) {
@@ -1244,6 +1264,20 @@ impl AnimationEngine {
             AnimationStep::Pause { multiplier } => {
                 let duration_ms = (self.speed_ms as f64 * multiplier) as u64;
                 self.pause_until = Some(Instant::now() + Duration::from_millis(duration_ms));
+            }
+            AnimationStep::WaitForAudio { chunk_id } => {
+                // Start playing this audio chunk and wait for it to finish
+                self.current_audio_chunk = Some(chunk_id);
+                self.audio_chunk_finished = false;
+
+                if let Some(audio_player) = &self.audio_player {
+                    eprintln!("[ANIM] Waiting for audio chunk {}", chunk_id);
+                    audio_player.trigger_chunk(chunk_id);
+                }
+
+                // Pause animation until audio finishes
+                // We'll check audio_chunk_finished in tick()
+                self.next_step_delay = 0; // Don't add delay, we're waiting for audio
             }
             AnimationStep::OpenFileDialogStart => {
                 self.dialog_typing_text = String::new();
