@@ -168,14 +168,20 @@ impl<'a> UI<'a> {
         
         // Trigger voiceover if enabled
         if let Some(audio_player) = &self.audio_player {
-            let (insertions, deletions) = metadata.calculate_stats();
+            // Build file changes with diffs for LLM
+            let file_changes: Vec<(String, String)> = metadata.changes.iter()
+                .filter(|c| !c.is_excluded)
+                .map(|change| {
+                    let diff = Self::build_diff_text(change);
+                    (change.path.clone(), diff)
+                })
+                .collect();
+            
             audio_player.play_commit_narration_async(
                 metadata.hash.clone(),
                 metadata.author.clone(),
                 metadata.message.clone(),
-                metadata.changes.len(),
-                insertions,
-                deletions,
+                file_changes,
             );
         }
         
@@ -185,6 +191,29 @@ impl<'a> UI<'a> {
             PlaybackState::Paused => self.engine.pause(),
         }
         self.state = UIState::Playing;
+    }
+
+    /// Build a text representation of file diff
+    fn build_diff_text(change: &crate::git::FileChange) -> String {
+        let mut diff = String::new();
+        
+        for hunk in &change.hunks {
+            for line in &hunk.lines {
+                match line.change_type {
+                    crate::git::LineChangeType::Addition => {
+                        diff.push_str(&format!("+{}\n", line.content));
+                    }
+                    crate::git::LineChangeType::Deletion => {
+                        diff.push_str(&format!("-{}\n", line.content));
+                    }
+                    crate::git::LineChangeType::Context => {
+                        diff.push_str(&format!(" {}\n", line.content));
+                    }
+                }
+            }
+        }
+        
+        diff
     }
 
     fn record_history(&mut self, metadata: &CommitMetadata) {

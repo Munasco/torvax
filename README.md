@@ -68,7 +68,7 @@ See the [Installation Guide](docs/installation.md) for more options and troubles
 🌳 **Project File Tree** — Directory structure with change statistics
 🖥️ **Screensaver Mode** — Endless random commit playback
 🎭 **Themes** — 9 built-in themes + full customization support
-🎙️ **Voiceover Narration** — AI-powered audio explanations using ElevenLabs or Inworld
+🎙️ **LLM-Powered Voiceover** — OpenAI explains what code changes do, narrated via ElevenLabs/Inworld
 ⚡ **Fast & Lightweight** — Built with Rust for performance
 
 ## Usage
@@ -147,7 +147,12 @@ gitlogue theme set dracula
 export ELEVENLABS_API_KEY="your-api-key"
 gitlogue --voiceover
 
-# Review commits with voiceover narration
+# Enable LLM-powered intelligent explanations (requires OpenAI + TTS keys)
+export OPENAI_API_KEY="sk-..."
+export ELEVENLABS_API_KEY="your-api-key"
+gitlogue --voiceover
+
+# Review commits with intelligent voiceover narration
 gitlogue --commit HEAD~10..HEAD --voiceover
 
 # Combine options
@@ -196,6 +201,7 @@ Bash, C, C#, C++, Clojure, CSS, Dart, Elixir, Erlang, Go, Haskell, HTML, Java, J
 [Usage Guide](docs/usage.md)  
 [Configuration Guide](docs/configuration.md)  
 [Voiceover Feature](docs/voiceover.md)  
+[LLM-Powered Explanations](docs/llm-voiceover.md) ⭐ NEW  
 [Theme Customization](docs/themes.md)  
 [Contributing Guidelines](docs/CONTRIBUTING.md)  
 [Architecture Overview](docs/ARCHITECTURE.md)

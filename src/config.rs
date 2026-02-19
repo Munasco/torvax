@@ -169,7 +169,9 @@ impl Config {
                  [voiceover]\n\
                  enabled = {}\n\
                  provider = \"{}\"  # Options: \"elevenlabs\" or \"inworld\"\n\
-                 # api_key = \"your-api-key-here\"  # Set your API key\n\
+                 use_llm_explanations = {}  # Use OpenAI to generate intelligent explanations\n\
+                 # api_key = \"your-tts-api-key-here\"  # TTS provider API key (or use env var)\n\
+                 # openai_api_key = \"your-openai-key\"  # OpenAI API key (or use OPENAI_API_KEY env var)\n\
                  # voice_id = \"21m00Tcm4TlvDq8ikWAM\"  # Optional: ElevenLabs voice ID\n\
                  # model_id = \"eleven_monolingual_v1\"  # Optional: ElevenLabs model ID\n",
                 self.theme,
@@ -183,7 +185,8 @@ impl Config {
                 match self.voiceover.provider {
                     crate::audio::VoiceoverProvider::ElevenLabs => "elevenlabs",
                     crate::audio::VoiceoverProvider::Inworld => "inworld",
-                }
+                },
+                self.voiceover.use_llm_explanations
             )
         };
 

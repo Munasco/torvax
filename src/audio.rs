@@ -13,6 +13,8 @@ pub struct VoiceoverConfig {
     pub api_key: Option<String>,
     pub voice_id: Option<String>,
     pub model_id: Option<String>,
+    pub openai_api_key: Option<String>,
+    pub use_llm_explanations: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -31,6 +33,8 @@ impl Default for VoiceoverConfig {
             api_key: None,
             voice_id: None,
             model_id: None,
+            openai_api_key: None,
+            use_llm_explanations: false,
         }
     }
 }
@@ -113,9 +117,7 @@ impl AudioPlayer {
         commit_hash: String,
         author: String,
         message: String,
-        files_changed: usize,
-        insertions: usize,
-        deletions: usize,
+        file_changes: Vec<(String, String)>, // (filename, diff_text)
     ) {
         if !self.config.enabled || self.config.api_key.is_none() {
             return;
@@ -136,7 +138,21 @@ impl AudioPlayer {
             };
             
             rt.block_on(async {
-                match Self::synthesize_speech_static(&config, &commit_hash, &author, &message, files_changed, insertions, deletions).await {
+                // Generate narration text (either via LLM or simple summary)
+                let narration = if config.use_llm_explanations && config.openai_api_key.is_some() {
+                    match Self::generate_llm_explanation(&config, &commit_hash, &author, &message, &file_changes).await {
+                        Ok(explanation) => explanation,
+                        Err(e) => {
+                            eprintln!("Failed to generate LLM explanation: {}. Falling back to simple narration.", e);
+                            Self::generate_simple_narration(&commit_hash, &author, &message, file_changes.len())
+                        }
+                    }
+                } else {
+                    Self::generate_simple_narration(&commit_hash, &author, &message, file_changes.len())
+                };
+                
+                // Synthesize speech from narration
+                match Self::synthesize_speech_from_text(&config, &narration).await {
                     Ok(audio_data) => {
                         #[cfg(feature = "audio")]
                         if let Some(sink_arc) = sink {
@@ -158,28 +174,113 @@ impl AudioPlayer {
         });
     }
 
-    /// Static helper to synthesize speech (for use in spawned threads)
-    async fn synthesize_speech_static(
-        config: &VoiceoverConfig,
+    /// Generate a simple narration without LLM
+    fn generate_simple_narration(
         commit_hash: &str,
         author: &str,
         message: &str,
         files_changed: usize,
-        insertions: usize,
-        deletions: usize,
-    ) -> Result<Vec<u8>> {
-        let narration = {
-            let commit_short = &commit_hash[..7.min(commit_hash.len())];
-            let file_text = if files_changed == 1 { "file" } else { "files" };
-            format!(
-                "Reviewing commit {} by {}. {}. This commit modified {} {}, adding {} lines and removing {} lines.",
-                commit_short, author, message, files_changed, file_text, insertions, deletions
-            )
-        };
+    ) -> String {
+        let commit_short = &commit_hash[..7.min(commit_hash.len())];
+        let file_text = if files_changed == 1 { "file" } else { "files" };
+        
+        format!(
+            "Reviewing commit {} by {}. {}. This commit modified {} {}.",
+            commit_short,
+            author,
+            message,
+            files_changed,
+            file_text
+        )
+    }
 
+    /// Generate an intelligent explanation using OpenAI
+    async fn generate_llm_explanation(
+        config: &VoiceoverConfig,
+        commit_hash: &str,
+        author: &str,
+        message: &str,
+        file_changes: &[(String, String)],
+    ) -> Result<String> {
+        let api_key = config
+            .openai_api_key
+            .as_ref()
+            .context("OpenAI API key not configured")?;
+
+        let commit_short = &commit_hash[..7.min(commit_hash.len())];
+
+        // Build context for the LLM
+        let mut context = format!(
+            "You are reviewing a git commit. Provide a clear, conversational explanation of what this code change does and why it matters. Keep it concise (2-3 sentences max).\n\n\
+            Commit: {}\n\
+            Author: {}\n\
+            Message: {}\n\n\
+            Files changed:\n",
+            commit_short, author, message
+        );
+
+        // Include file diffs (limited to avoid token limits)
+        for (filename, diff) in file_changes.iter().take(5) {
+            context.push_str(&format!("\n--- {} ---\n", filename));
+            // Limit diff size
+            let diff_lines: Vec<&str> = diff.lines().take(50).collect();
+            context.push_str(&diff_lines.join("\n"));
+            context.push('\n');
+        }
+
+        if file_changes.len() > 5 {
+            context.push_str(&format!("\n... and {} more files\n", file_changes.len() - 5));
+        }
+
+        // Call OpenAI API
+        let client = reqwest::Client::new();
+        let response = client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a code reviewer providing clear, conversational explanations of git commits. Explain what the code does and why, not just what files changed. Be concise and use natural language suitable for text-to-speech."
+                    },
+                    {
+                        "role": "user",
+                        "content": context
+                    }
+                ],
+                "max_tokens": 200,
+                "temperature": 0.7
+            }))
+            .send()
+            .await
+            .context("Failed to send request to OpenAI API")?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("OpenAI API error: {}", error_text);
+        }
+
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse OpenAI response")?;
+
+        let explanation = response_json["choices"][0]["message"]["content"]
+            .as_str()
+            .context("Failed to extract explanation from OpenAI response")?
+            .trim()
+            .to_string();
+
+        Ok(explanation)
+    }
+
+    /// Synthesize speech from text using configured TTS provider
+    async fn synthesize_speech_from_text(config: &VoiceoverConfig, text: &str) -> Result<Vec<u8>> {
         match config.provider {
-            VoiceoverProvider::ElevenLabs => Self::synthesize_elevenlabs_static(config, &narration).await,
-            VoiceoverProvider::Inworld => Self::synthesize_inworld_static(config, &narration).await,
+            VoiceoverProvider::ElevenLabs => Self::synthesize_elevenlabs_static(config, text).await,
+            VoiceoverProvider::Inworld => Self::synthesize_inworld_static(config, text).await,
         }
     }
 

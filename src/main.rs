@@ -296,6 +296,17 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<AudioPlaye
         }
     }
     
+    // Try to get OpenAI API key from environment if not in config
+    if voiceover_config.openai_api_key.is_none() {
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            voiceover_config.openai_api_key = Some(key);
+            // Enable LLM explanations if OpenAI key is available
+            if voiceover_config.enabled {
+                voiceover_config.use_llm_explanations = true;
+            }
+        }
+    }
+    
     if voiceover_config.enabled {
         if voiceover_config.api_key.is_none() {
             eprintln!("Warning: Voiceover enabled but no API key configured. Set it in config file or environment variable (ELEVENLABS_API_KEY or INWORLD_API_KEY)");
