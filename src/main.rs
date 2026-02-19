@@ -274,7 +274,7 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<AudioPlaye
             "elevenlabs" => VoiceoverProvider::ElevenLabs,
             "inworld" => VoiceoverProvider::Inworld,
             _ => {
-                eprintln!("Warning: Unknown voiceover provider '{}', using default", provider_str);
+                eprintln!("Warning: Unknown voiceover provider '{}', using default (elevenlabs)", provider_str);
                 voiceover_config.provider
             }
         };

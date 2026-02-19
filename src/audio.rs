@@ -126,7 +126,15 @@ impl AudioPlayer {
         let sink = self.sink.clone();
 
         thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().ok()?;
+            // Create runtime in the spawned thread to avoid blocking the UI
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("Failed to create Tokio runtime for voiceover: {}", e);
+                    return;
+                }
+            };
+            
             rt.block_on(async {
                 match Self::synthesize_speech_static(&config, &commit_hash, &author, &message, files_changed, insertions, deletions).await {
                     Ok(audio_data) => {
@@ -146,9 +154,7 @@ impl AudioPlayer {
                         eprintln!("Voiceover error: {}", e);
                     }
                 }
-                Some(())
             });
-            Some(())
         });
     }
 
