@@ -241,6 +241,18 @@ impl AudioPlayer {
         })
     }
 
+    /// Get chunks for a specific file
+    pub fn get_chunks_for_file(&self, file_path: &str) -> Vec<DiffChunk> {
+        if let Ok(chunks_guard) = self.chunks.lock() {
+            chunks_guard.values()
+                .filter(|chunk| chunk.file_path == file_path)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Trigger playback of a specific audio chunk
     pub fn trigger_chunk(&self, chunk_id: usize) {
         if !self.config.enabled || self.sink.is_none() {
@@ -381,24 +393,24 @@ impl AudioPlayer {
         Ok(chunks)
     }
 
-    /// Generate voiceover segments for a commit (one per file)
-    pub fn generate_voiceover_segments(
+    /// Generate audio chunks for all files in a commit
+    pub fn generate_audio_chunks(
         &self,
         commit_hash: String,
         author: String,
         message: String,
         file_changes: Vec<(String, String, FileStatus)>, // (filename, diff_text, status)
-    ) -> Vec<VoiceoverSegment> {
+    ) -> Vec<DiffChunk> {
         if !self.config.enabled || self.config.api_key.is_none() {
             return Vec::new();
         }
 
         let config = self.config.clone();
-        let segment_queue = self.segment_queue.clone();
+        let chunks_map = self.chunks.clone();
 
-        eprintln!("[AUDIO] Pre-generating all voiceovers (this will take a few seconds)...");
+        eprintln!("[AUDIO] Generating audio chunks (using LLM to split diffs)...");
 
-        // Generate ALL audio synchronously BEFORE returning
+        // Generate ALL audio chunks synchronously BEFORE returning
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
@@ -408,7 +420,8 @@ impl AudioPlayer {
         };
 
         rt.block_on(async {
-                let mut segments = Vec::new();
+                let mut all_chunks = Vec::new();
+                let mut global_chunk_id = 0;
 
                 // Extract project context once for all files (always fresh, LLM-only)
                 let mut project_context = extract_project_context();
@@ -423,39 +436,17 @@ impl AudioPlayer {
                         }
                         Err(e) => {
                             eprintln!("[AUDIO] FATAL: LLM context generation failed: {}", e);
-                            eprintln!("[AUDIO] Cannot proceed without project context - skipping voiceovers");
-                            return Vec::new(); // Return empty segments if LLM fails
+                            eprintln!("[AUDIO] Cannot proceed without project context - skipping audio chunks");
+                            return Vec::new();
                         }
                     }
                 } else {
-                    eprintln!("[AUDIO] LLM explanations disabled - no voiceovers will be generated");
+                    eprintln!("[AUDIO] LLM explanations disabled - no audio chunks will be generated");
                     return Vec::new();
                 }
 
                 let desc_preview = &project_context.description[..50.min(project_context.description.len())];
                 eprintln!("[AUDIO] Project: {} - {}...", project_context.repo_name, desc_preview);
-
-                // Generate commit intro segment
-                let intro_text = format!(
-                    "Reviewing commit by {}. {}",
-                    author,
-                    message
-                );
-
-                eprintln!("[AUDIO] Generating intro voiceover...");
-                if let Ok(audio_data) = Self::synthesize_speech_from_text(&config, &intro_text).await {
-                    eprintln!("[AUDIO] Intro voiceover generated ({} bytes)", audio_data.len());
-
-                    segments.push(VoiceoverSegment {
-                        text: intro_text.clone(),
-                        audio_data: Some(audio_data),
-                        file_path: None,
-                        trigger_type: VoiceoverTrigger::CommitStart,
-                        estimated_duration_secs: estimate_audio_duration(&intro_text),
-                    });
-                } else {
-                    eprintln!("[AUDIO] Failed to generate intro voiceover");
-                }
 
                 // Limit to top 5 most important files to avoid rate limits
                 let max_files = 5;
@@ -466,68 +457,72 @@ impl AudioPlayer {
                         !filename.contains("yarn.lock") &&
                         !filename.contains("pnpm-lock.yaml") &&
                         !filename.ends_with(".lock") &&
-                        !filename.ends_with(".json") // Skip all JSON files for now
+                        !filename.ends_with(".json")
                     })
                     .take(max_files)
                     .collect();
 
-                eprintln!("[AUDIO] Generating {} file voiceovers (limited from {})...",
-                    important_files.len(), file_changes.len());
-                for (i, (filename, diff, file_status)) in important_files.iter().enumerate() {
+                eprintln!("[AUDIO] Splitting {} files into explainable chunks...", important_files.len());
+
+                for (i, (filename, diff, _file_status)) in important_files.iter().enumerate() {
                     // Add delay between API calls to avoid rate limits
                     if i > 0 {
                         tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
                     }
 
-                    eprintln!("[AUDIO] Processing file: {}", filename);
-                    let narration = if config.use_llm_explanations && config.gemini_api_key.is_some() {
-                        match Self::generate_file_explanation_with_retry(&config, &project_context, &message, &commit_hash, filename, file_status, diff).await {
-                            Ok(explanation) => {
-                                eprintln!("[AUDIO] Gemini explanation: {}", explanation);
-                                explanation
+                    eprintln!("[AUDIO] Splitting file: {}", filename);
+
+                    // Split this file's diff into logical chunks
+                    match Self::split_diff_into_chunks(&config, &project_context, &message, filename, diff).await {
+                        Ok(mut file_chunks) => {
+                            eprintln!("[AUDIO] Split {} into {} chunks", filename, file_chunks.len());
+
+                            // Generate audio for each chunk
+                            for chunk in &mut file_chunks {
+                                // Assign global chunk ID
+                                chunk.chunk_id = global_chunk_id;
+                                global_chunk_id += 1;
+
+                                eprintln!("[AUDIO] Generating audio for chunk {} (lines {}-{}): {}",
+                                    chunk.chunk_id, chunk.start_line, chunk.end_line,
+                                    &chunk.explanation[..50.min(chunk.explanation.len())]);
+
+                                // Add delay before TTS call
+                                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+                                match Self::synthesize_speech_from_text(&config, &chunk.explanation).await {
+                                    Ok(audio_data) => {
+                                        let duration = estimate_audio_duration(&chunk.explanation);
+                                        eprintln!("[AUDIO] Generated audio for chunk {} ({} bytes, ~{:.1}s)",
+                                            chunk.chunk_id, audio_data.len(), duration);
+
+                                        chunk.audio_data = Some(audio_data);
+                                        chunk.estimated_duration_secs = duration;
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[AUDIO] Failed to synthesize speech for chunk {}: {}", chunk.chunk_id, e);
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("[AUDIO] Failed to generate Gemini explanation for {}: {}", filename, e);
-                                format!("Now reviewing changes in {}", filename)
-                            }
-                        }
-                    } else {
-                        format!("Now reviewing changes in {}", filename)
-                    };
 
-                    // Add delay before TTS call
-                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-
-                    match Self::synthesize_speech_from_text(&config, &narration).await {
-                        Ok(audio_data) => {
-                            eprintln!("[AUDIO] Generated audio for {} ({} bytes)", filename, audio_data.len());
-
-                            // Store segment for later playback via triggers
-                            let duration = estimate_audio_duration(&narration);
-                            eprintln!("[AUDIO] Estimated duration: {:.1}s", duration);
-
-                            segments.push(VoiceoverSegment {
-                                text: narration.clone(),
-                                audio_data: Some(audio_data),
-                                file_path: Some(filename.clone()),
-                                trigger_type: VoiceoverTrigger::FileOpen(filename.clone()),
-                                estimated_duration_secs: duration,
-                            });
+                            all_chunks.extend(file_chunks);
                         }
                         Err(e) => {
-                            eprintln!("[AUDIO] Failed to synthesize speech for {}: {}", filename, e);
+                            eprintln!("[AUDIO] Failed to split {} into chunks: {}", filename, e);
                         }
                     }
                 }
 
-                eprintln!("[AUDIO] Generated {} total voiceover segments", segments.len());
+                eprintln!("[AUDIO] Generated {} total audio chunks", all_chunks.len());
 
-                // Store segments in queue
-                if let Ok(mut queue) = segment_queue.lock() {
-                    *queue = segments.clone().into();
+                // Store chunks in HashMap for animation to access
+                if let Ok(mut chunks_guard) = chunks_map.lock() {
+                    for chunk in &all_chunks {
+                        chunks_guard.insert(chunk.chunk_id, chunk.clone());
+                    }
                 }
 
-                segments
+                all_chunks
             })
     }
 

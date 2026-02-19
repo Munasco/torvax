@@ -897,8 +897,34 @@ impl AnimationEngine {
             .map(|c| c.lines().collect())
             .unwrap_or_default();
 
+        // Get audio chunks for this file (if audio player is available)
+        let audio_chunks = if let Some(audio_player) = &self.audio_player {
+            audio_player.get_chunks_for_file(&change.path)
+        } else {
+            Vec::new()
+        };
+
+        let mut processed_chunks: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
         // Process each hunk
         for hunk in &change.hunks {
+            // Check if this hunk is within an audio chunk range
+            let hunk_line = hunk.old_start as usize;
+            let matching_chunk = audio_chunks.iter().find(|chunk| {
+                hunk_line >= chunk.start_line && hunk_line <= chunk.end_line
+            });
+
+            // If we found a new chunk, insert WaitForAudio step
+            if let Some(chunk) = matching_chunk {
+                if !processed_chunks.contains(&chunk.chunk_id) {
+                    eprintln!("[ANIM] Inserting WaitForAudio step for chunk {} at hunk line {}", chunk.chunk_id, hunk_line);
+                    self.steps.push(AnimationStep::WaitForAudio {
+                        chunk_id: chunk.chunk_id,
+                    });
+                    processed_chunks.insert(chunk.chunk_id);
+                }
+            }
+
             // Calculate target line in current buffer
             // hunk.old_start is 1-indexed (Git line numbers start at 1)
             // We need to convert to 0-indexed and adjust by how many lines we've added/removed
