@@ -17,7 +17,7 @@ Watch commits unfold with realistic typing animations, syntax highlighting, and 
 ```bash
 # Clone and build
 git clone https://github.com/Munasco/gitlogue.git && cd gitlogue
-cargo build --release --features audio
+cargo build --release
 
 # Set API keys
 export OPENAI_API_KEY="sk-..."        # For intelligent explanations

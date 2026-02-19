@@ -56,8 +56,8 @@ export INWORLD_API_KEY="..."
 git clone https://github.com/Munasco/gitlogue.git
 cd gitlogue
 
-# Build with audio support
-cargo build --release --features audio
+# Build
+cargo build --release
 
 # Run with voiceover on your repository
 cd /path/to/your/repo
@@ -121,8 +121,8 @@ gitlogue --voiceover --commit main..feature-branch --speed 100
 After cloning gitlogue and setting up API keys:
 
 ```bash
-# Build with audio feature
-cargo build --release --features audio
+# Build
+cargo build --release
 
 # Test on the gitlogue repo itself
 export OPENAI_API_KEY="sk-..."

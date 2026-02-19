@@ -36,8 +36,8 @@ You said:
 git clone https://github.com/Munasco/gitlogue.git
 cd gitlogue
 
-# 2. Build with audio support
-cargo build --release --features audio
+# 2. Build
+cargo build --release
 
 # 3. Set your API keys
 export OPENAI_API_KEY="sk-..."        # Get from platform.openai.com

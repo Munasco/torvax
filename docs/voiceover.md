@@ -168,24 +168,20 @@ The narration would be:
 
 Voiceovers play asynchronously in the background, allowing the commit animation to continue without blocking. The audio starts when a commit is loaded and plays while the typing animation proceeds.
 
-### Requirements
-
-The voiceover feature requires the `audio` feature to be enabled at compile time. By default, this feature is **optional** to keep the binary size small for users who don't need audio.
-
-To enable audio support:
-
-```bash
-cargo build --features audio
-cargo install --path . --features audio
-```
-
 ### Dependencies
 
 The audio system uses:
 - `reqwest` - HTTP client for API requests
-- `rodio` - Audio playback library (optional)
+- `rodio` - Audio playback library
 - `tokio` - Async runtime for background processing
 - `serde_json` - JSON serialization for API communication
+
+Audio support is now built-in by default, so you can simply:
+
+```bash
+cargo build
+cargo install --path .
+```
 
 ## Troubleshooting
 
@@ -196,8 +192,7 @@ The audio system uses:
 **Solutions:**
 1. Check that your API key is correctly set
 2. Verify you have an active internet connection
-3. Ensure you've enabled the `audio` feature when building
-4. Check terminal output for error messages
+3. Check terminal output for error messages
 
 ### API Errors
 
@@ -223,14 +218,6 @@ The audio system uses:
    # Higher stability = more consistent but less dynamic
    # Lower stability = more expressive but potentially less consistent
    ```
-
-### Building Without Audio
-
-If you want to build without audio support to reduce binary size:
-
-```bash
-cargo build --no-default-features
-```
 
 ## Privacy and Security
 

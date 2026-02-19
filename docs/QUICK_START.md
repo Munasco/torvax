@@ -20,8 +20,8 @@ This guide helps you quickly test the LLM-powered voiceover feature after clonin
 git clone https://github.com/Munasco/gitlogue.git
 cd gitlogue
 
-# Build with audio support (takes 2-3 minutes)
-cargo build --release --features audio
+# Build (takes 2-3 minutes)
+cargo build --release
 ```
 
 ### Step 2: Set API Keys
@@ -86,7 +86,7 @@ rustup update
 
 # Clean and rebuild
 cargo clean
-cargo build --release --features audio
+cargo build --release
 ```
 
 ### LLM Explanations Not Working
@@ -187,7 +187,7 @@ If you encounter issues:
 ```bash
 $ git clone https://github.com/Munasco/gitlogue.git
 $ cd gitlogue
-$ cargo build --release --features audio
+$ cargo build --release
    Compiling gitlogue v0.8.0 (/path/to/gitlogue)
    Finished release [optimized] target(s) in 3m 02s
 

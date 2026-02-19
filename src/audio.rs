@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::thread;
-
-#[cfg(feature = "audio")]
 use rodio::{Decoder, OutputStream, Sink};
 
 /// Configuration for voiceover providers
@@ -42,9 +40,7 @@ impl Default for VoiceoverConfig {
 /// Audio player that handles voiceover playback
 pub struct AudioPlayer {
     config: VoiceoverConfig,
-    #[cfg(feature = "audio")]
     _stream: Option<OutputStream>,
-    #[cfg(feature = "audio")]
     sink: Option<std::sync::Arc<std::sync::Mutex<Sink>>>,
 }
 
@@ -53,31 +49,21 @@ impl AudioPlayer {
         if !config.enabled {
             return Ok(Self {
                 config,
-                #[cfg(feature = "audio")]
                 _stream: None,
-                #[cfg(feature = "audio")]
                 sink: None,
             });
         }
 
-        #[cfg(feature = "audio")]
-        {
-            let (_stream, stream_handle) = OutputStream::try_default()
-                .context("Failed to create audio output stream")?;
-            let sink = Sink::try_new(&stream_handle)
-                .context("Failed to create audio sink")?;
+        let (_stream, stream_handle) = OutputStream::try_default()
+            .context("Failed to create audio output stream")?;
+        let sink = Sink::try_new(&stream_handle)
+            .context("Failed to create audio sink")?;
 
-            Ok(Self {
-                config,
-                _stream: Some(_stream),
-                sink: Some(std::sync::Arc::new(std::sync::Mutex::new(sink))),
-            })
-        }
-
-        #[cfg(not(feature = "audio"))]
-        {
-            Ok(Self { config })
-        }
+        Ok(Self {
+            config,
+            _stream: Some(_stream),
+            sink: Some(std::sync::Arc::new(std::sync::Mutex::new(sink))),
+        })
     }
 
     /// Generate narration text from commit metadata
@@ -124,7 +110,6 @@ impl AudioPlayer {
         }
 
         let config = self.config.clone();
-        #[cfg(feature = "audio")]
         let sink = self.sink.clone();
 
         thread::spawn(move || {
@@ -154,7 +139,6 @@ impl AudioPlayer {
                 // Synthesize speech from narration
                 match Self::synthesize_speech_from_text(&config, &narration).await {
                     Ok(audio_data) => {
-                        #[cfg(feature = "audio")]
                         if let Some(sink_arc) = sink {
                             if let Ok(sink_guard) = sink_arc.lock() {
                                 let cursor = std::io::Cursor::new(audio_data);
@@ -163,8 +147,6 @@ impl AudioPlayer {
                                 }
                             }
                         }
-                        #[cfg(not(feature = "audio"))]
-                        let _ = audio_data; // Silence unused warning when audio feature disabled
                     }
                     Err(e) => {
                         eprintln!("Voiceover error: {}", e);
@@ -380,12 +362,9 @@ impl AudioPlayer {
     /// Stop any currently playing audio
     #[allow(dead_code)]
     pub fn stop(&mut self) {
-        #[cfg(feature = "audio")]
-        {
-            if let Some(sink_arc) = &self.sink {
-                if let Ok(sink) = sink_arc.lock() {
-                    sink.stop();
-                }
+        if let Some(sink_arc) = &self.sink {
+            if let Ok(sink) = sink_arc.lock() {
+                sink.stop();
             }
         }
     }
@@ -393,12 +372,9 @@ impl AudioPlayer {
     /// Check if audio is currently playing
     #[allow(dead_code)]
     pub fn is_playing(&self) -> bool {
-        #[cfg(feature = "audio")]
-        {
-            if let Some(sink_arc) = &self.sink {
-                if let Ok(sink) = sink_arc.lock() {
-                    return !sink.empty();
-                }
+        if let Some(sink_arc) = &self.sink {
+            if let Ok(sink) = sink_arc.lock() {
+                return !sink.empty();
             }
         }
         false
