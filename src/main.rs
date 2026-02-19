@@ -297,11 +297,11 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioP
         }
     }
     
-    // Try to get OpenAI API key from environment if not in config
-    if voiceover_config.openai_api_key.is_none() {
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            voiceover_config.openai_api_key = Some(key);
-            // Enable LLM explanations if OpenAI key is available
+    // Try to get Gemini API key from environment if not in config
+    if voiceover_config.gemini_api_key.is_none() {
+        if let Ok(key) = std::env::var("GEMINI_API_KEY") {
+            voiceover_config.gemini_api_key = Some(key);
+            // Enable LLM explanations if Gemini key is available
             if voiceover_config.enabled {
                 voiceover_config.use_llm_explanations = true;
             }

@@ -6,7 +6,11 @@
       "mcp__deepwiki__ask_question",
       "Bash(cargo tree:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "WebFetch(domain:crates.io)",
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clean:*)"
     ]
   }
 }

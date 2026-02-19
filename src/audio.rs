@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::collections::VecDeque;
 use rodio::{Decoder, OutputStream, Sink};
-use async_openai::{Client, config::OpenAIConfig, types::{CreateChatCompletionRequestArgs, ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs, ChatCompletionRequestSystemMessageArgs}};
 
 /// Configuration for voiceover providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,7 +13,7 @@ pub struct VoiceoverConfig {
     pub api_key: Option<String>,
     pub voice_id: Option<String>,
     pub model_id: Option<String>,
-    pub openai_api_key: Option<String>,
+    pub gemini_api_key: Option<String>,
     pub use_llm_explanations: bool,
 }
 
@@ -34,7 +33,7 @@ impl Default for VoiceoverConfig {
             api_key: None,
             voice_id: None,
             model_id: None,
-            openai_api_key: None,
+            gemini_api_key: None,
             use_llm_explanations: false,
         }
     }
@@ -165,14 +164,14 @@ impl AudioPlayer {
                     }
 
                     eprintln!("[AUDIO] Processing file: {}", filename);
-                    let narration = if config.use_llm_explanations && config.openai_api_key.is_some() {
+                    let narration = if config.use_llm_explanations && config.gemini_api_key.is_some() {
                         match Self::generate_file_explanation_with_retry(&config, &commit_hash, filename, diff).await {
                             Ok(explanation) => {
-                                eprintln!("[AUDIO] LLM explanation: {}", explanation);
+                                eprintln!("[AUDIO] Gemini explanation: {}", explanation);
                                 explanation
                             }
                             Err(e) => {
-                                eprintln!("[AUDIO] Failed to generate LLM explanation for {}: {}", filename, e);
+                                eprintln!("[AUDIO] Failed to generate Gemini explanation for {}: {}", filename, e);
                                 format!("Now reviewing changes in {}", filename)
                             }
                         }
@@ -301,7 +300,7 @@ impl AudioPlayer {
         anyhow::bail!("Max retries exceeded")
     }
 
-    /// Generate explanation for a specific file change using LLM
+    /// Generate explanation for a specific file change using Gemini
     async fn generate_file_explanation(
         config: &VoiceoverConfig,
         commit_hash: &str,
@@ -309,60 +308,66 @@ impl AudioPlayer {
         diff: &str,
     ) -> Result<String> {
         let api_key = config
-            .openai_api_key
+            .gemini_api_key
             .as_ref()
-            .context("OpenAI API key not configured")?;
+            .context("Gemini API key not configured")?;
 
         let commit_short = &commit_hash[..7.min(commit_hash.len())];
 
-        // Build context for the LLM
-        let context = format!(
-            "You're narrating this file as it opens and code types out. \
-            Describe what's happening in this file change like you're walking someone through it live. \
-            Use natural spoken English - imagine you're doing a voiceover for a tutorial video.\n\n\
+        // Build context for the LLM - MORE DETAILED
+        let user_prompt = format!(
+            "You're narrating a live code walkthrough. Explain what's happening in this file change. \
+            Be detailed but natural - explain WHAT changed, WHY it matters, and HOW it works. \
+            Talk like you're teaching someone while watching code being typed. \
+            Keep it to 2-3 sentences (30-40 words). Use spoken language - no code syntax, no HTML tags.\n\n\
             File: {}\n\
             Commit: {}\n\n\
-            Code changes:\n{}",
+            Code changes:\n{}\n\n\
+            Example: 'We're adding authentication middleware here that checks JWT tokens on every request. \
+            This prevents unauthorized access by validating the token signature and expiration time before allowing the request through.'",
             filename, commit_short,
-            diff.lines().take(30).collect::<Vec<_>>().join("\n")
+            diff.lines().take(50).collect::<Vec<_>>().join("\n")
         );
 
-        // Use official OpenAI client
-        let openai_config = OpenAIConfig::new().with_api_key(api_key);
-        let client = Client::with_config(openai_config);
+        // Use Gemini 3 Pro via REST API
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro:generateContent?key={}",
+            api_key
+        );
 
-        let request = CreateChatCompletionRequestArgs::default()
-            .model("gpt-5.2")
-            .messages(vec![
-                ChatCompletionRequestMessage::System(
-                    ChatCompletionRequestSystemMessageArgs::default()
-                        .content("You are narrating a live code walkthrough for audio voiceover. \
-                                 CRITICAL: Keep it to EXACTLY ONE SHORT SENTENCE (10-15 words max). \
-                                 Be conversational and natural. Use spoken language - no code syntax, no HTML tags. \
-                                 Focus on the ONE most important change. \
-                                 Examples: 'Adding authentication checks to prevent unauthorized access' or 'Refactoring the payment flow for better error handling'")
-                        .build()?
-                ),
-                ChatCompletionRequestMessage::User(
-                    ChatCompletionRequestUserMessageArgs::default()
-                        .content(context)
-                        .build()?
-                ),
-            ])
-            .temperature(0.5)
-            .build()?;
-
+        let client = reqwest::Client::new();
         let response = client
-            .chat()
-            .create(request)
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&serde_json::json!({
+                "contents": [{
+                    "parts": [{
+                        "text": user_prompt
+                    }]
+                }],
+                "generationConfig": {
+                    "temperature": 0.6,
+                    "maxOutputTokens": 200
+                }
+            }))
+            .send()
             .await
-            .context("Failed to call OpenAI API")?;
+            .context("Failed to send request to Gemini API")?;
 
-        let explanation = response
-            .choices
-            .first()
-            .and_then(|choice| choice.message.content.as_ref())
-            .context("No response from OpenAI")?
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Gemini API error ({}): {}", status, error_text);
+        }
+
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse Gemini response")?;
+
+        let explanation = response_json["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .context("Failed to extract explanation from Gemini response")?
             .trim()
             .to_string();
 
