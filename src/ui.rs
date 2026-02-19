@@ -173,12 +173,12 @@ impl<'a> UI<'a> {
         
         // Generate synced voiceover segments if enabled
         if let Some(audio_player) = &self.audio_player {
-            // Build file changes with diffs for LLM
-            let file_changes: Vec<(String, String)> = metadata.changes.iter()
+            // Build file changes with diffs and status for LLM
+            let file_changes: Vec<(String, String, crate::git::FileStatus)> = metadata.changes.iter()
                 .filter(|c| !c.is_excluded)
                 .map(|change| {
                     let diff = Self::build_diff_text(change);
-                    (change.path.clone(), diff)
+                    (change.path.clone(), diff, change.status.clone())
                 })
                 .collect();
 

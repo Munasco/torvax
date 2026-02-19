@@ -153,9 +153,16 @@ pub struct Args {
         num_args = 0..=1,
         default_missing_value = "true",
         value_name = "BOOL",
-        help = "Enable voiceover narration of git changes (requires API key in config)"
+        help = "Enable voiceover narration (uses Inworld by default, set --elevenlabs for ElevenLabs)\nRequires: INWORLD_API_KEY env var or api_key in config\nAlso requires: GEMINI_API_KEY env var for LLM-powered explanations"
     )]
     pub voiceover: Option<bool>,
+
+    #[arg(
+        long = "elevenlabs",
+        conflicts_with = "voiceover_provider",
+        help = "Use ElevenLabs TTS instead of Inworld (requires ELEVENLABS_API_KEY env var)"
+    )]
+    pub elevenlabs: bool,
 
     #[arg(
         long = "voiceover-provider",
@@ -269,13 +276,19 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioP
     if let Some(enabled) = args.voiceover {
         voiceover_config.enabled = enabled;
     }
-    
+
+    // Handle --elevenlabs flag
+    if args.elevenlabs {
+        voiceover_config.provider = VoiceoverProvider::ElevenLabs;
+        voiceover_config.enabled = true; // Auto-enable when --elevenlabs is used
+    }
+
     if let Some(ref provider_str) = args.voiceover_provider {
         voiceover_config.provider = match provider_str.to_lowercase().as_str() {
             "elevenlabs" => VoiceoverProvider::ElevenLabs,
             "inworld" => VoiceoverProvider::Inworld,
             _ => {
-                eprintln!("Warning: Unknown voiceover provider '{}', using default (elevenlabs)", provider_str);
+                eprintln!("Warning: Unknown voiceover provider '{}', using default (inworld)", provider_str);
                 voiceover_config.provider
             }
         };
