@@ -2,16 +2,25 @@
 
 The voiceover feature adds audio narration to git commit reviews, explaining the changes made in each commit. This makes git history more accessible and easier to understand, especially for code reviews and presentations.
 
+> **✨ NEW:** [LLM-Powered Intelligent Explanations](llm-voiceover.md) - Use OpenAI to generate smart, contextual explanations instead of just reading metadata!
+
 ## Overview
 
-Gitlogue can now narrate commit information using Text-to-Speech (TTS) services. When a commit is displayed, the voiceover system automatically generates and plays audio that describes:
+Gitlogue can now narrate commit information using Text-to-Speech (TTS) services. The system supports two modes:
 
+### Basic Mode (Default)
+When a commit is displayed, the voiceover reads:
 - The commit hash (shortened)
 - The author name
 - The commit message
 - Number of files changed
-- Lines added
-- Lines deleted
+
+### LLM-Enhanced Mode (Recommended)
+With OpenAI integration, get intelligent explanations like:
+- *"This commit fixes an authentication bug by adding token validation"*
+- *"The changes optimize database queries, reducing response time by 60%"*
+
+See [LLM-Powered Explanations](llm-voiceover.md) for setup and examples.
 
 ## Supported Providers
 

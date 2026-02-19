@@ -10,6 +10,25 @@ A cinematic Git commit replay tool for the terminal, turning your Git history in
 
 Watch commits unfold with realistic typing animations, syntax highlighting, and file tree transitions, transforming code changes into a visual experience.
 
+> **✨ NEW:** [LLM-Powered Voiceover](docs/llm-voiceover.md) - OpenAI explains what your code does, narrated by AI voices!
+
+## Quick Start with LLM Voiceover
+
+```bash
+# Clone and build
+git clone https://github.com/Munasco/gitlogue.git && cd gitlogue
+cargo build --release --features audio
+
+# Set API keys
+export OPENAI_API_KEY="sk-..."        # For intelligent explanations
+export ELEVENLABS_API_KEY="..."       # For voice synthesis
+
+# Test on this repo
+./target/release/gitlogue --voiceover --commit HEAD~5..HEAD
+```
+
+See [Quick Start Guide](docs/QUICK_START.md) for detailed setup.
+
 ## Installation
 
 ### Using Install Script (Recommended)
@@ -197,6 +216,7 @@ Bash, C, C#, C++, Clojure, CSS, Dart, Elixir, Erlang, Go, Haskell, HTML, Java, J
 
 ## Documentation
 
+[Quick Start Guide](docs/QUICK_START.md) ⭐ START HERE  
 [Installation Guide](docs/installation.md)  
 [Usage Guide](docs/usage.md)  
 [Configuration Guide](docs/configuration.md)  
