@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use crate::audio::VoiceoverConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -19,6 +20,8 @@ pub struct Config {
     pub ignore_patterns: Vec<String>,
     #[serde(default)]
     pub speed_rules: Vec<String>,
+    #[serde(default)]
+    pub voiceover: VoiceoverConfig,
 }
 
 fn default_theme() -> String {
@@ -55,6 +58,7 @@ impl Default for Config {
             loop_playback: default_loop(),
             ignore_patterns: default_ignore_patterns(),
             speed_rules: Vec::new(),
+            voiceover: VoiceoverConfig::default(),
         }
     }
 }
@@ -159,14 +163,27 @@ impl Config {
                  \n\
                  # Speed rules for different file types (pattern:milliseconds)\n\
                  # Examples: [\"*.java:50\", \"*.xml:5\", \"*.rs:30\"]\n\
-                 speed_rules = {}\n",
+                 speed_rules = {}\n\
+                 \n\
+                 # Voiceover settings for narrating git changes\n\
+                 [voiceover]\n\
+                 enabled = {}\n\
+                 provider = \"{}\"  # Options: \"elevenlabs\" or \"inworld\"\n\
+                 # api_key = \"your-api-key-here\"  # Set your API key\n\
+                 # voice_id = \"21m00Tcm4TlvDq8ikWAM\"  # Optional: ElevenLabs voice ID\n\
+                 # model_id = \"eleven_monolingual_v1\"  # Optional: ElevenLabs model ID\n",
                 self.theme,
                 self.speed,
                 self.background,
                 self.order,
                 self.loop_playback,
                 patterns_str,
-                speed_rules_str
+                speed_rules_str,
+                self.voiceover.enabled,
+                match self.voiceover.provider {
+                    crate::audio::VoiceoverProvider::ElevenLabs => "elevenlabs",
+                    crate::audio::VoiceoverProvider::Inworld => "inworld",
+                }
             )
         };
 

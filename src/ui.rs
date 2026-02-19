@@ -20,6 +20,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::animation::{AnimationEngine, SpeedRule, StepMode};
+use crate::audio::AudioPlayer;
 use crate::git::{CommitMetadata, DiffMode, GitRepository};
 use crate::panes::{EditorPane, FileTreePane, StatusBarPane, TerminalPane};
 use crate::theme::Theme;
@@ -63,6 +64,7 @@ pub struct UI<'a> {
     history_index: Option<usize>,
     menu_index: usize,
     prev_state: Option<Box<UIState>>,
+    audio_player: Option<AudioPlayer>,
 }
 
 impl<'a> UI<'a> {
@@ -77,6 +79,7 @@ impl<'a> UI<'a> {
         commit_spec: Option<String>,
         is_range_mode: bool,
         speed_rules: Vec<SpeedRule>,
+        audio_player: Option<AudioPlayer>,
     ) -> Self {
         let should_exit = Arc::new(AtomicBool::new(false));
         Self::setup_signal_handler(should_exit.clone());
@@ -105,6 +108,7 @@ impl<'a> UI<'a> {
             history_index: None,
             menu_index: 0,
             prev_state: None,
+            audio_player,
         }
     }
 
@@ -161,6 +165,20 @@ impl<'a> UI<'a> {
         if record_history {
             self.record_history(&metadata);
         }
+        
+        // Trigger voiceover if enabled
+        if let Some(audio_player) = &self.audio_player {
+            let (insertions, deletions) = metadata.calculate_stats();
+            audio_player.play_commit_narration_async(
+                metadata.hash.clone(),
+                metadata.author.clone(),
+                metadata.message.clone(),
+                metadata.changes.len(),
+                insertions,
+                deletions,
+            );
+        }
+        
         self.engine.load_commit(&metadata);
         match self.playback_state {
             PlaybackState::Playing => self.engine.resume(),

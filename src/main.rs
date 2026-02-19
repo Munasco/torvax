@@ -1,4 +1,5 @@
 mod animation;
+mod audio;
 mod config;
 mod git;
 mod panes;
@@ -9,6 +10,7 @@ mod widgets;
 
 use animation::SpeedRule;
 use anyhow::{Context, Result};
+use audio::{AudioPlayer, VoiceoverProvider};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use git::{DiffMode, GitRepository};
@@ -145,6 +147,22 @@ pub struct Args {
     )]
     pub speed_rule: Vec<String>,
 
+    #[arg(
+        long = "voiceover",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable voiceover narration of git changes (requires API key in config)"
+    )]
+    pub voiceover: Option<bool>,
+
+    #[arg(
+        long = "voiceover-provider",
+        value_name = "PROVIDER",
+        help = "Voiceover provider to use: elevenlabs or inworld (overrides config file)"
+    )]
+    pub voiceover_provider: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -242,6 +260,60 @@ impl Args {
     }
 }
 
+/// Create audio player from config and CLI arguments
+fn create_audio_player(config: &Config, args: &Args) -> Result<Option<AudioPlayer>> {
+    let mut voiceover_config = config.voiceover.clone();
+    
+    // Override with CLI arguments
+    if let Some(enabled) = args.voiceover {
+        voiceover_config.enabled = enabled;
+    }
+    
+    if let Some(ref provider_str) = args.voiceover_provider {
+        voiceover_config.provider = match provider_str.to_lowercase().as_str() {
+            "elevenlabs" => VoiceoverProvider::ElevenLabs,
+            "inworld" => VoiceoverProvider::Inworld,
+            _ => {
+                eprintln!("Warning: Unknown voiceover provider '{}', using default", provider_str);
+                voiceover_config.provider
+            }
+        };
+    }
+    
+    // Try to get API key from environment if not in config
+    if voiceover_config.enabled && voiceover_config.api_key.is_none() {
+        match voiceover_config.provider {
+            VoiceoverProvider::ElevenLabs => {
+                if let Ok(key) = std::env::var("ELEVENLABS_API_KEY") {
+                    voiceover_config.api_key = Some(key);
+                }
+            }
+            VoiceoverProvider::Inworld => {
+                if let Ok(key) = std::env::var("INWORLD_API_KEY") {
+                    voiceover_config.api_key = Some(key);
+                }
+            }
+        }
+    }
+    
+    if voiceover_config.enabled {
+        if voiceover_config.api_key.is_none() {
+            eprintln!("Warning: Voiceover enabled but no API key configured. Set it in config file or environment variable (ELEVENLABS_API_KEY or INWORLD_API_KEY)");
+            return Ok(None);
+        }
+        
+        match AudioPlayer::new(voiceover_config) {
+            Ok(player) => Ok(Some(player)),
+            Err(e) => {
+                eprintln!("Warning: Failed to initialize audio player: {}. Continuing without voiceover.", e);
+                Ok(None)
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -328,6 +400,9 @@ fn main() -> Result<()> {
                     })
                     .collect();
 
+                // Create audio player
+                let audio_player = create_audio_player(&config, &args)?;
+
                 // Create UI - pass repo ref only if looping (to refresh diff)
                 let repo_ref = if loop_playback { Some(&repo) } else { None };
                 let mut ui = UI::new(
@@ -339,6 +414,7 @@ fn main() -> Result<()> {
                     None,
                     false,
                     speed_rules,
+                    audio_player,
                 );
                 ui.set_diff_mode(Some(mode));
                 ui.load_commit(metadata);
@@ -449,6 +525,9 @@ fn main() -> Result<()> {
         })
         .collect();
 
+    // Create audio player
+    let audio_player = create_audio_player(&config, &args)?;
+
     // Create UI with repository reference
     // Filtered modes (range/author/date) always need repo ref for iteration
     let repo_ref = if is_range_mode || is_filtered {
@@ -467,6 +546,7 @@ fn main() -> Result<()> {
         args.commit.clone(),
         is_range_mode,
         speed_rules,
+        audio_player,
     );
     ui.load_commit(metadata);
     ui.run()?;
