@@ -106,19 +106,19 @@ impl AudioPlayer {
 
         let config = self.config.clone();
         let segment_queue = self.segment_queue.clone();
-        let sink = self.sink.clone();
 
-        // Spawn background thread to generate all segments
-        thread::spawn(move || {
-            let rt = match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    eprintln!("Failed to create Tokio runtime for voiceover: {}", e);
-                    return;
-                }
-            };
+        eprintln!("[AUDIO] Pre-generating all voiceovers (this will take a few seconds)...");
 
-            rt.block_on(async {
+        // Generate ALL audio synchronously BEFORE returning
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("Failed to create Tokio runtime for voiceover: {}", e);
+                return Vec::new();
+            }
+        };
+
+        rt.block_on(async {
                 let mut segments = Vec::new();
 
                 // Generate commit intro segment
@@ -131,18 +131,6 @@ impl AudioPlayer {
                 eprintln!("[AUDIO] Generating intro voiceover...");
                 if let Ok(audio_data) = Self::synthesize_speech_from_text(&config, &intro_text).await {
                     eprintln!("[AUDIO] Intro voiceover generated ({} bytes)", audio_data.len());
-
-                    // Play intro immediately (don't wait for queue)
-                    if let Some(sink_arc) = &sink {
-                        if let Ok(sink_guard) = sink_arc.lock() {
-                            let cursor = std::io::Cursor::new(audio_data.clone());
-                            if let Ok(source) = Decoder::new(cursor) {
-                                sink_guard.append(source);
-                                sink_guard.play();
-                                eprintln!("[AUDIO] Intro playing immediately");
-                            }
-                        }
-                    }
 
                     segments.push(VoiceoverSegment {
                         text: intro_text.clone(),
@@ -185,25 +173,13 @@ impl AudioPlayer {
                         Ok(audio_data) => {
                             eprintln!("[AUDIO] Generated audio for {} ({} bytes)", filename, audio_data.len());
 
-                            // Store segment in queue for potential triggers
+                            // Store segment for later playback via triggers
                             segments.push(VoiceoverSegment {
                                 text: narration.clone(),
-                                audio_data: Some(audio_data.clone()),
+                                audio_data: Some(audio_data),
                                 file_path: Some(filename.clone()),
                                 trigger_type: VoiceoverTrigger::FileOpen(filename.clone()),
                             });
-
-                            // Also play immediately when ready (don't wait for trigger)
-                            if let Some(sink_arc) = &sink {
-                                if let Ok(sink_guard) = sink_arc.lock() {
-                                    let cursor = std::io::Cursor::new(audio_data);
-                                    if let Ok(source) = Decoder::new(cursor) {
-                                        sink_guard.append(source);
-                                        sink_guard.play();
-                                        eprintln!("[AUDIO] Playing file voiceover immediately: {}", filename);
-                                    }
-                                }
-                            }
                         }
                         Err(e) => {
                             eprintln!("[AUDIO] Failed to synthesize speech for {}: {}", filename, e);
@@ -215,12 +191,11 @@ impl AudioPlayer {
 
                 // Store segments in queue
                 if let Ok(mut queue) = segment_queue.lock() {
-                    *queue = segments.into();
+                    *queue = segments.clone().into();
                 }
-            });
-        });
 
-        Vec::new() // Segments will be populated asynchronously
+                segments
+            })
     }
 
     /// Trigger voiceover for a specific event

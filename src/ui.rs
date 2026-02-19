@@ -182,14 +182,18 @@ impl<'a> UI<'a> {
                 })
                 .collect();
 
-            // Generate all voiceover segments (intro + per-file commentary)
-            // Intro will play immediately from within the generation thread
-            audio_player.generate_voiceover_segments(
+            // Pre-generate all voiceover segments (BLOCKS until complete)
+            eprintln!("[AUDIO] Waiting for all voiceovers to generate before starting animation...");
+            let _segments = audio_player.generate_voiceover_segments(
                 metadata.hash.clone(),
                 metadata.author.clone(),
                 metadata.message.clone(),
                 file_changes,
             );
+            eprintln!("[AUDIO] All voiceovers ready! Starting animation...");
+
+            // Trigger commit intro immediately
+            audio_player.trigger_voiceover(crate::audio::VoiceoverTrigger::CommitStart);
         }
         
         self.engine.load_commit(&metadata);
