@@ -68,6 +68,7 @@ See the [Installation Guide](docs/installation.md) for more options and troubles
 🌳 **Project File Tree** — Directory structure with change statistics
 🖥️ **Screensaver Mode** — Endless random commit playback
 🎭 **Themes** — 9 built-in themes + full customization support
+🎙️ **Voiceover Narration** — AI-powered audio explanations using ElevenLabs or Inworld
 ⚡ **Fast & Lightweight** — Built with Rust for performance
 
 ## Usage
@@ -142,6 +143,13 @@ gitlogue theme list
 # Set default theme
 gitlogue theme set dracula
 
+# Enable voiceover for git review (requires API key)
+export ELEVENLABS_API_KEY="your-api-key"
+gitlogue --voiceover
+
+# Review commits with voiceover narration
+gitlogue --commit HEAD~10..HEAD --voiceover
+
 # Combine options
 gitlogue --commit HEAD~5 --author "john" --theme nord --speed 15 --ignore "*.ipynb"
 ```
@@ -187,6 +195,7 @@ Bash, C, C#, C++, Clojure, CSS, Dart, Elixir, Erlang, Go, Haskell, HTML, Java, J
 [Installation Guide](docs/installation.md)  
 [Usage Guide](docs/usage.md)  
 [Configuration Guide](docs/configuration.md)  
+[Voiceover Feature](docs/voiceover.md)  
 [Theme Customization](docs/themes.md)  
 [Contributing Guidelines](docs/CONTRIBUTING.md)  
 [Architecture Overview](docs/ARCHITECTURE.md)
