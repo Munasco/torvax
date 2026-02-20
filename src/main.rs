@@ -342,10 +342,6 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioP
     if voiceover_config.openai_api_key.is_none() {
         if let Ok(key) = std::env::var("OPENAI_API_KEY") {
             voiceover_config.openai_api_key = Some(key);
-            // Enable LLM explanations if OpenAI key is available
-            if voiceover_config.enabled {
-                voiceover_config.use_llm_explanations = true;
-            }
         }
     }
     
@@ -371,6 +367,14 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioP
                 return Ok(None);
             }
         }
+
+        // Always enable LLM explanations when an OpenAI key is present —
+        // this is what actually generates narration text and triggers audio.
+        // Also persist enabled + use_llm_explanations so future runs work
+        // without re-prompting.
+        voiceover_config.use_llm_explanations = true;
+        let _ = config::Config::enable_voiceover();
+        let _ = config::Config::save_voiceover_key("use_llm_explanations", "true");
 
         match AudioPlayer::new(voiceover_config) {
             Ok(player) => Ok(Some(Arc::new(player))),
