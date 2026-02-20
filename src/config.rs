@@ -227,7 +227,11 @@ impl Config {
         if doc.get("voiceover").is_none() {
             doc["voiceover"] = toml_edit::table();
         }
-        doc["voiceover"][field] = toml_edit::value(value);
+        doc["voiceover"][field] = if let Ok(b) = value.parse::<bool>() {
+            toml_edit::value(b)
+        } else {
+            toml_edit::value(value)
+        };
 
         fs::write(&config_path, doc.to_string())?;
         Ok(())
