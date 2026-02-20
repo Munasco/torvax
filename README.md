@@ -66,7 +66,11 @@ export INWORLD_API_KEY="your-inworld-base64-key"
 torvax setup
 
 # Narrated replay of recent commits
-torvax --voiceover --commit HEAD@5..HEAD
+torvax --voiceover --commit HEAD~3..HEAD
+
+# HEAD@N is shorthand for HEAD~N — these are identical:
+torvax --voiceover --commit HEAD@3..HEAD
+torvax --voiceover --commit HEAD~3..HEAD
 
 # Screensaver mode (no voiceover needed)
 torvax
@@ -75,10 +79,8 @@ torvax
 torvax --voiceover --commit abc123
 
 # Loop through a range
-torvax --voiceover --commit HEAD@10..HEAD --loop
+torvax --voiceover --commit HEAD~10..HEAD --loop
 ```
-
-`HEAD@N` is shorthand for `HEAD~N` (N commits back). Both work.
 
 ## How it works
 
