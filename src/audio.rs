@@ -20,19 +20,23 @@ use async_openai::{
 /// Configuration for voiceover providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceoverConfig {
+    #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
     pub provider: VoiceoverProvider,
     pub api_key: Option<String>,
     pub voice_id: Option<String>,
     pub model_id: Option<String>,
     pub openai_api_key: Option<String>,
+    #[serde(default)]
     pub use_llm_explanations: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum VoiceoverProvider {
     #[serde(rename = "elevenlabs")]
     ElevenLabs,
+    #[default]
     #[serde(rename = "inworld")]
     Inworld,
 }
