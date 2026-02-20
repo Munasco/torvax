@@ -21,19 +21,14 @@ Torvax needs two API keys to run with voiceover:
 ## Install
 
 ```bash
-# macOS / Linux (recommended)
-curl -fsSL https://raw.githubusercontent.com/Munasco/torvax/main/install.sh | bash
-```
-
-```bash
 # Homebrew
 brew tap Munasco/tap
 brew install torvax
 ```
 
 ```bash
-# From source (requires Rust)
-cargo install --git https://github.com/Munasco/torvax.git
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Munasco/torvax/main/install.sh | bash
 ```
 
 ## Setup
@@ -124,7 +119,7 @@ torvax --ignore "*.ipynb" --ignore "poetry.lock"
 torvax --author "john" --after "2024-01-01"
 ```
 
-Full config at `~/.config/torvax/config.toml`. See [Configuration Guide](docs/configuration.md).
+Full config at `~/.config/torvax/config.toml`.
 
 ## Credits
 
