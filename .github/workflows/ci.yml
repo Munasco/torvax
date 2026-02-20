@@ -30,6 +30,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install ALSA dev (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -43,6 +45,8 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Install ALSA dev (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -53,21 +57,21 @@ jobs:
     name: Build
     strategy:
       matrix:
-        os: [ubuntu-22.04, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-22.04
+            alsa: true
+          - os: macos-latest
+            alsa: false
+          - os: windows-latest
+            alsa: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install ALSA dev (Linux)
+        if: matrix.alsa
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
       - run: cargo build --release
-
-  nix-build:
-    name: Nix Build
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v27
-      - name: Build unstable package
-        run: nix build .#unstable

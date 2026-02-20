@@ -170,30 +170,42 @@ impl<'a> UI<'a> {
         if record_history {
             self.record_history(&metadata);
         }
-        
-        // Generate synced voiceover segments if enabled
+
+        // If audio is enabled, generate chunks in a background thread
+        // silently while the video plays (non-blocking).
+        // We extract only the Send-safe parts (config + chunks map) because
+        // AudioPlayer itself contains OutputStream which is !Send.
         if let Some(audio_player) = &self.audio_player {
-            // Build file changes with diffs and status for LLM
-            let file_changes: Vec<(String, String, crate::git::FileStatus)> = metadata.changes.iter()
+            let config = audio_player.voiceover_config().clone();
+            let chunks_map = audio_player.chunks_handle();
+            let file_changes: Vec<(String, String, crate::git::FileStatus)> = metadata
+                .changes
+                .iter()
                 .filter(|c| !c.is_excluded)
-                .map(|change| {
-                    let diff = Self::build_diff_text(change);
-                    (change.path.clone(), diff, change.status.clone())
-                })
+                .map(|c| (c.path.clone(), Self::build_diff_text(c), c.status.clone()))
                 .collect();
+            let message = metadata.message.clone();
+            let speed_ms = self.speed_ms;
 
-            // Pre-generate all audio chunks (BLOCKS until complete)
-            let _chunks = audio_player.generate_audio_chunks(
-                metadata.hash.clone(),
-                metadata.author.clone(),
-                metadata.message.clone(),
-                file_changes,
-                self.speed_ms,
-            );
-
-            // Animation engine will insert WaitForAudio steps based on chunks
+            // Spawn audio generation in background, but DON'T block the UI
+            std::thread::spawn(move || {
+                crate::audio::generate_audio_chunks(
+                    config,
+                    chunks_map,
+                    message,
+                    file_changes,
+                    speed_ms,
+                );
+            });
         }
-        
+
+        // Start the video immediately (audio will populate in background)
+        self.finish_play_commit(metadata);
+    }
+
+    /// Called once audio generation is done (or skipped) to actually start
+    /// the animation with whatever audio chunks are available.
+    fn finish_play_commit(&mut self, metadata: CommitMetadata) {
         self.engine.load_commit(&metadata);
         match self.playback_state {
             PlaybackState::Playing => self.engine.resume(),
@@ -208,8 +220,10 @@ impl<'a> UI<'a> {
 
         for hunk in &change.hunks {
             // Include hunk header so calculate_animation_duration can parse it
-            diff.push_str(&format!("@@ -{},{} +{},{} @@\n",
-                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines));
+            diff.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines
+            ));
             for line in &hunk.lines {
                 match line.change_type {
                     crate::git::LineChangeType::Addition => {
