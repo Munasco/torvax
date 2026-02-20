@@ -183,11 +183,11 @@ pub fn generate_audio_chunks_with_progress(
     message: String,
     file_changes: Vec<(String, String, FileStatus)>,
     speed_ms: u64,
-    progress: Arc<Mutex<String>>,
+    progress: Arc<Mutex<(String, f32)>>,
 ) -> Vec<DiffChunk> {
     let _ = progress
         .lock()
-        .map(|mut p| *p = "Analyzing repository...".to_string());
+        .map(|mut p| *p = ("Analyzing repository...".to_string(), 0.0));
     generate_audio_chunks_impl(
         config,
         chunks_map,
@@ -221,7 +221,7 @@ fn generate_audio_chunks_impl(
     message: String,
     file_changes: Vec<(String, String, FileStatus)>,
     speed_ms: u64,
-    progress: Option<Arc<Mutex<String>>>,
+    progress: Option<Arc<Mutex<(String, f32)>>>,
 ) -> Vec<DiffChunk> {
     if !config.enabled || config.api_key.is_none() {
         return Vec::new();
@@ -241,7 +241,7 @@ fn generate_audio_chunks_impl(
         if let Some(ref p) = progress {
             let _ = p
                 .lock()
-                .map(|mut s| *s = "Generating project context with GPT...".to_string());
+                .map(|mut s| *s = ("Generating project context with GPT...".to_string(), 0.05));
         }
 
         let mut project_context = llm::extract_project_context();
@@ -281,9 +281,12 @@ fn generate_audio_chunks_impl(
 
         if let Some(ref p) = progress {
             let _ = p.lock().map(|mut s| {
-                *s = format!(
-                    "Ordering {} files by development flow...",
-                    important_files.len()
+                *s = (
+                    format!(
+                        "Ordering {} files by development flow...",
+                        important_files.len()
+                    ),
+                    0.1,
                 )
             });
         }
@@ -301,13 +304,19 @@ fn generate_audio_chunks_impl(
         let total_files = ordered.len();
 
         for (i, (filename, diff, _)) in ordered.iter().enumerate() {
+            // Progress: 15% to 95% based on file processing
+            let file_progress = 0.15 + (0.80 * (i as f32 / total_files.max(1) as f32));
+
             if let Some(ref p) = progress {
                 let _ = p.lock().map(|mut s| {
-                    *s = format!(
-                        "Processing file {}/{}: {}",
-                        i + 1,
-                        total_files,
-                        filename.rsplit('/').next().unwrap_or(filename)
+                    *s = (
+                        format!(
+                            "Processing file {}/{}: {}",
+                            i + 1,
+                            total_files,
+                            filename.rsplit('/').next().unwrap_or(filename)
+                        ),
+                        file_progress,
                     )
                 });
             }
@@ -333,12 +342,15 @@ fn generate_audio_chunks_impl(
 
                     if let Some(ref p) = progress {
                         let _ = p.lock().map(|mut s| {
-                            *s = format!(
-                                "Synthesizing audio {}/{}: {} (chunk {})",
-                                i + 1,
-                                total_files,
-                                filename.rsplit('/').next().unwrap_or(filename),
-                                chunk.chunk_id + 1
+                            *s = (
+                                format!(
+                                    "Synthesizing audio {}/{}: {} (chunk {})",
+                                    i + 1,
+                                    total_files,
+                                    filename.rsplit('/').next().unwrap_or(filename),
+                                    chunk.chunk_id + 1
+                                ),
+                                file_progress,
                             )
                         });
                     }
@@ -369,6 +381,10 @@ fn generate_audio_chunks_impl(
             for chunk in &all_chunks {
                 guard.insert(chunk.chunk_id, chunk.clone());
             }
+        }
+
+        if let Some(ref p) = progress {
+            let _ = p.lock().map(|mut s| *s = ("Complete!".to_string(), 1.0));
         }
 
         all_chunks

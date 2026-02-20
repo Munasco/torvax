@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Gauge, Padding, Paragraph},
     Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
@@ -68,7 +68,7 @@ pub struct UI<'a> {
     audio_player: Option<Arc<AudioPlayer>>,
     audio_gen_handle: Option<std::thread::JoinHandle<()>>,
     pending_metadata: Option<CommitMetadata>,
-    audio_progress: Arc<Mutex<String>>,
+    audio_progress: Arc<Mutex<(String, f32)>>, // (status message, progress 0.0-1.0)
 }
 
 impl<'a> UI<'a> {
@@ -120,7 +120,7 @@ impl<'a> UI<'a> {
             audio_player,
             audio_gen_handle: None,
             pending_metadata: None,
-            audio_progress: Arc::new(Mutex::new(String::new())),
+            audio_progress: Arc::new(Mutex::new((String::new(), 0.0))),
         }
     }
 
@@ -823,26 +823,15 @@ impl<'a> UI<'a> {
     }
 
     fn render_generating_audio(&self, f: &mut Frame, size: Rect) {
-        let progress = self
+        let (status, progress) = self
             .audio_progress
             .lock()
             .ok()
             .map(|p| p.clone())
-            .unwrap_or_else(|| "Initializing...".to_string());
+            .unwrap_or_else(|| ("Initializing...".to_string(), 0.0));
 
-        let lines = vec![
-            Line::from(Span::styled(
-                "Generating voiceover narration",
-                Style::default().fg(self.theme.file_tree_current_file_fg),
-            )),
-            Line::from(""),
-            Line::from(progress),
-            Line::from(""),
-            Line::from(Span::styled(
-                "q  quit",
-                Style::default().fg(self.theme.status_message),
-            )),
-        ];
+        let area = Self::centered_rect(size, 70, 11);
+        f.render_widget(Clear, area);
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -854,9 +843,47 @@ impl<'a> UI<'a> {
                     .bg(self.theme.editor_cursor_line_bg),
             );
 
-        let area = Self::centered_rect(size, 60, 9);
-        f.render_widget(Clear, area);
-        f.render_widget(Paragraph::new(lines).block(block), area);
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        // Split inner area into: title line, progress bar, status line, quit hint
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Title
+                Constraint::Length(1), // Spacing
+                Constraint::Length(1), // Progress bar
+                Constraint::Length(1), // Spacing
+                Constraint::Length(1), // Status message
+                Constraint::Length(1), // Spacing
+                Constraint::Length(1), // Quit hint
+            ])
+            .split(inner);
+
+        let title = Paragraph::new(Line::from(Span::styled(
+            "Generating voiceover narration",
+            Style::default().fg(self.theme.file_tree_current_file_fg),
+        )));
+        f.render_widget(title, chunks[0]);
+
+        let progress_bar = Gauge::default()
+            .gauge_style(
+                Style::default()
+                    .fg(self.theme.file_tree_current_file_fg)
+                    .bg(self.theme.background_right),
+            )
+            .ratio(progress as f64)
+            .label(format!("{}%", (progress * 100.0) as u8));
+        f.render_widget(progress_bar, chunks[2]);
+
+        let status_line = Paragraph::new(Line::from(status));
+        f.render_widget(status_line, chunks[4]);
+
+        let quit_hint = Paragraph::new(Line::from(Span::styled(
+            "q  quit",
+            Style::default().fg(self.theme.status_message),
+        )));
+        f.render_widget(quit_hint, chunks[6]);
     }
 
     fn centered_rect(outer: Rect, width: u16, height: u16) -> Rect {
