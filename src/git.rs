@@ -335,9 +335,10 @@ impl GitRepository {
     }
 
     pub fn get_commit(&self, hash: &str) -> Result<CommitMetadata> {
+        let hash = Self::normalize_ref(hash);
         let obj = self
             .repo
-            .revparse_single(hash)
+            .revparse_single(&hash)
             .context("Invalid commit hash or commit not found")?;
 
         let commit = obj.peel_to_commit().context("Object is not a commit")?;
@@ -531,7 +532,32 @@ impl GitRepository {
         Ok(commits)
     }
 
+    /// Normalize shorthand commit refs before passing to libgit2.
+    /// Converts `HEAD@N` → `HEAD~N` (e.g. `HEAD@3..HEAD` → `HEAD~3..HEAD`).
+    fn normalize_ref(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '@' {
+                let mut digits = String::new();
+                while chars.peek().map(|d| d.is_ascii_digit()).unwrap_or(false) {
+                    digits.push(chars.next().unwrap());
+                }
+                if !digits.is_empty() {
+                    result.push('~');
+                    result.push_str(&digits);
+                } else {
+                    result.push('@');
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
     fn parse_commit_range(&self, range: &str) -> Result<Vec<Oid>> {
+        let range = &Self::normalize_ref(range);
         // Reject symmetric difference operator (not supported)
         if range.contains("...") {
             anyhow::bail!(

@@ -62,18 +62,23 @@ export INWORLD_API_KEY="your-inworld-base64-key"
 ## Run
 
 ```bash
-# Narrated replay of recent commits
-torvax --voiceover --commit HEAD~5..HEAD
+# First time — save your API keys
+torvax setup
 
-# Screensaver mode (random commits, no voiceover)
+# Narrated replay of recent commits
+torvax --voiceover --commit HEAD@5..HEAD
+
+# Screensaver mode (no voiceover needed)
 torvax
 
 # Specific commit
-torvax --commit abc123
+torvax --voiceover --commit abc123
 
-# Loop through commits
-torvax --commit HEAD~10..HEAD --loop
+# Loop through a range
+torvax --voiceover --commit HEAD@10..HEAD --loop
 ```
+
+`HEAD@N` is shorthand for `HEAD~N` (N commits back). Both work.
 
 ## How it works
 
