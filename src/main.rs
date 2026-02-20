@@ -414,14 +414,23 @@ fn main() -> Result<()> {
                     "api_key",
                 );
 
-                // Also enable voiceover in config
-                if openai_key.is_some() || inworld_key.is_some() {
-                    let _ = config::Config::enable_voiceover();
-                    println!();
-                    println!("Setup complete. Run: torvax --voiceover --commit HEAD~5..HEAD");
-                } else {
-                    println!();
-                    println!("No keys saved. Re-run `torvax setup` when you have them.");
+                println!();
+                match (openai_key.is_some(), inworld_key.is_some()) {
+                    (true, true) => {
+                        let _ = config::Config::enable_voiceover();
+                        println!("All set. Run: torvax --voiceover --commit HEAD~5..HEAD");
+                    }
+                    (true, false) => {
+                        println!("OpenAI key saved. Still need your Inworld key.");
+                        println!("Run `torvax setup` again, or it will be prompted on first run.");
+                    }
+                    (false, true) => {
+                        println!("Inworld key saved. Still need your OpenAI key.");
+                        println!("Run `torvax setup` again, or it will be prompted on first run.");
+                    }
+                    (false, false) => {
+                        println!("No keys saved. Re-run `torvax setup` when you have them.");
+                    }
                 }
                 return Ok(());
             }

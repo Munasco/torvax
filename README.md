@@ -33,20 +33,26 @@ curl -fsSL https://raw.githubusercontent.com/Munasco/torvax/main/install.sh | ba
 
 ## Setup
 
-After installing, add your API keys to `~/.config/torvax/config.toml`:
+Run the setup command — it will ask for your keys and save them:
+
+```bash
+torvax setup
+```
+
+Or add them manually to `~/.config/torvax/config.toml`:
 
 ```toml
 [voiceover]
 enabled = true
 provider = "inworld"
 use_llm_explanations = true
-openai_api_key = "sk-..."               # Your OpenAI key
-api_key = "your-inworld-base64-key"     # Your Inworld Basic Auth key
+openai_api_key = "sk-..."
+api_key = "your-inworld-base64-key"
 voice_id = "Ashley"
 model_id = "inworld-tts-1.5-max"
 ```
 
-Or export as environment variables:
+Or as environment variables:
 
 ```bash
 export OPENAI_API_KEY="sk-..."
