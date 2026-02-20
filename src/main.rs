@@ -30,10 +30,10 @@ pub enum PlaybackOrder {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "gitlogue",
+    name = "torvax",
     version,
-    about = "A Git history screensaver - watch your code rewrite itself",
-    long_about = "gitlogue is a terminal-based screensaver that replays Git commits as if a ghost developer were typing each change by hand. Characters appear, vanish, and transform with natural pacing and syntax highlighting."
+    about = "Git review of your diffs, like a movie",
+    long_about = "torvax replays your git history as a narrated code walkthrough — AI explains what changed and why while the code types itself on screen."
 )]
 pub struct Args {
     #[arg(
@@ -322,15 +322,30 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioP
     }
     
     if voiceover_config.enabled {
-        if voiceover_config.api_key.is_none() {
-            eprintln!("Warning: Voiceover enabled but no API key configured. Set it in config file or environment variable (ELEVENLABS_API_KEY or INWORLD_API_KEY)");
+        if voiceover_config.openai_api_key.is_none() {
+            eprintln!("\ntorvax: OpenAI API key required for voiceover.");
+            eprintln!("  Get one at: https://platform.openai.com/api-keys");
+            eprintln!("  Then add to ~/.config/torvax/config.toml:");
+            eprintln!("    [voiceover]");
+            eprintln!("    openai_api_key = \"sk-...\"");
+            eprintln!("  Or set: export OPENAI_API_KEY=\"sk-...\"");
             return Ok(None);
         }
-        
+
+        if voiceover_config.api_key.is_none() {
+            eprintln!("\ntorvax: Inworld API key required for voice narration.");
+            eprintln!("  Get one at: https://inworld.ai → API → Basic Auth key");
+            eprintln!("  Then add to ~/.config/torvax/config.toml:");
+            eprintln!("    [voiceover]");
+            eprintln!("    api_key = \"your-inworld-base64-key\"");
+            eprintln!("  Or set: export INWORLD_API_KEY=\"your-inworld-base64-key\"");
+            return Ok(None);
+        }
+
         match AudioPlayer::new(voiceover_config) {
             Ok(player) => Ok(Some(Arc::new(player))),
             Err(e) => {
-                eprintln!("Warning: Failed to initialize audio player: {}. Continuing without voiceover.", e);
+                eprintln!("\ntorvax: Failed to initialize audio: {}", e);
                 Ok(None)
             }
         }

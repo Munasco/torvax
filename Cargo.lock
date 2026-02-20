@@ -1078,64 +1078,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitlogue"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "async-openai",
- "base64",
- "chrono",
- "chrono-english",
- "clap",
- "crossterm",
- "ctrlc",
- "dirs",
- "git2",
- "globset",
- "rand 0.10.0",
- "ratatui",
- "reqwest",
- "rodio",
- "serde",
- "serde_json",
- "streaming-iterator",
- "tokio",
- "toml",
- "toml_edit 0.25.2+spec-1.1.0",
- "tree-sitter",
- "tree-sitter-bash",
- "tree-sitter-c",
- "tree-sitter-c-sharp",
- "tree-sitter-clojure",
- "tree-sitter-cpp",
- "tree-sitter-css",
- "tree-sitter-dart",
- "tree-sitter-elixir",
- "tree-sitter-erlang",
- "tree-sitter-go",
- "tree-sitter-haskell",
- "tree-sitter-html",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-json",
- "tree-sitter-kotlin-ng",
- "tree-sitter-lua",
- "tree-sitter-md",
- "tree-sitter-php",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-scala",
- "tree-sitter-svelte-ng",
- "tree-sitter-swift",
- "tree-sitter-typescript",
- "tree-sitter-xml",
- "tree-sitter-yaml",
- "tree-sitter-zig",
- "unicode-width",
-]
-
-[[package]]
 name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3435,6 +3377,64 @@ name = "toml_writer"
 version = "1.0.6+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab16f14aed21ee8bfd8ec22513f7287cd4a91aa92e44edfe2c17ddd004e92607"
+
+[[package]]
+name = "torvax"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "async-openai",
+ "base64",
+ "chrono",
+ "chrono-english",
+ "clap",
+ "crossterm",
+ "ctrlc",
+ "dirs",
+ "git2",
+ "globset",
+ "rand 0.10.0",
+ "ratatui",
+ "reqwest",
+ "rodio",
+ "serde",
+ "serde_json",
+ "streaming-iterator",
+ "tokio",
+ "toml",
+ "toml_edit 0.25.2+spec-1.1.0",
+ "tree-sitter",
+ "tree-sitter-bash",
+ "tree-sitter-c",
+ "tree-sitter-c-sharp",
+ "tree-sitter-clojure",
+ "tree-sitter-cpp",
+ "tree-sitter-css",
+ "tree-sitter-dart",
+ "tree-sitter-elixir",
+ "tree-sitter-erlang",
+ "tree-sitter-go",
+ "tree-sitter-haskell",
+ "tree-sitter-html",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-kotlin-ng",
+ "tree-sitter-lua",
+ "tree-sitter-md",
+ "tree-sitter-php",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-scala",
+ "tree-sitter-svelte-ng",
+ "tree-sitter-swift",
+ "tree-sitter-typescript",
+ "tree-sitter-xml",
+ "tree-sitter-yaml",
+ "tree-sitter-zig",
+ "unicode-width",
+]
 
 [[package]]
 name = "tower"

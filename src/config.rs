@@ -139,7 +139,7 @@ impl Config {
             };
 
             format!(
-                "# gitlogue configuration file\n\
+                "# torvax configuration file\n\
                  # All settings are optional and will use defaults if not specified\n\
                  \n\
                  # Theme to use for syntax highlighting\n\
@@ -198,7 +198,7 @@ impl Config {
         let config_dir = dirs::home_dir()
             .context("Failed to determine home directory")?
             .join(".config")
-            .join("gitlogue");
+            .join("torvax");
 
         fs::create_dir_all(&config_dir).with_context(|| {
             format!(
@@ -215,7 +215,7 @@ impl Config {
         let config_dir = dirs::home_dir()
             .context("Failed to determine home directory")?
             .join(".config")
-            .join("gitlogue")
+            .join("torvax")
             .join("themes");
 
         fs::create_dir_all(&config_dir).with_context(|| {

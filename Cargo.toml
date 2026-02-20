@@ -1,11 +1,11 @@
 [package]
-name = "gitlogue"
+name = "torvax"
 version = "0.8.0"
 edition = "2021"
-authors = ["unhappychoice"]
-description = "A Git history screensaver - watch your code rewrite itself"
+authors = ["Munasco"]
+description = "Git review of your diffs, like a movie"
 license = "ISC"
-repository = "https://github.com/unhappychoice/gitlogue"
+repository = "https://github.com/Munasco/torvax"
 
 exclude = [
     "*.png",
@@ -78,11 +78,11 @@ tokio = { version = "1.42", features = ["rt", "rt-multi-thread"] }
 async-openai = "0.28"
 
 [lib]
-name = "gitlogue"
+name = "torvax"
 path = "src/lib.rs"
 
 [[bin]]
-name = "gitlogue"
+name = "torvax"
 path = "src/main.rs"
 
 

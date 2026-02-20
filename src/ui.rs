@@ -42,7 +42,7 @@ enum PlaybackState {
     Paused,
 }
 
-/// Main UI controller for the gitlogue terminal interface.
+/// Main UI controller for the torvax terminal interface.
 pub struct UI<'a> {
     state: UIState,
     speed_ms: u64,
@@ -183,14 +183,13 @@ impl<'a> UI<'a> {
                 .collect();
 
             // Pre-generate all audio chunks (BLOCKS until complete)
-            eprintln!("[AUDIO] Generating audio chunks for commit...");
-            let chunks = audio_player.generate_audio_chunks(
+            let _chunks = audio_player.generate_audio_chunks(
                 metadata.hash.clone(),
                 metadata.author.clone(),
                 metadata.message.clone(),
                 file_changes,
+                self.speed_ms,
             );
-            eprintln!("[AUDIO] Generated {} audio chunks! Starting animation...", chunks.len());
 
             // Animation engine will insert WaitForAudio steps based on chunks
         }
@@ -203,11 +202,14 @@ impl<'a> UI<'a> {
         self.state = UIState::Playing;
     }
 
-    /// Build a text representation of file diff
+    /// Build a text representation of file diff (including @@ hunk headers for duration calculation)
     fn build_diff_text(change: &crate::git::FileChange) -> String {
         let mut diff = String::new();
-        
+
         for hunk in &change.hunks {
+            // Include hunk header so calculate_animation_duration can parse it
+            diff.push_str(&format!("@@ -{},{} +{},{} @@\n",
+                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines));
             for line in &hunk.lines {
                 match line.change_type {
                     crate::git::LineChangeType::Addition => {
@@ -222,7 +224,7 @@ impl<'a> UI<'a> {
                 }
             }
         }
-        
+
         diff
     }
 
@@ -741,15 +743,14 @@ impl<'a> UI<'a> {
         let version = env!("CARGO_PKG_VERSION");
         let lines = vec![
             Line::from(Span::styled(
-                "gitlogue",
+                "torvax",
                 Style::default().fg(self.theme.file_tree_current_file_fg),
             )),
             Line::from(format!("Version {version}")),
             Line::from(""),
-            Line::from("A cinematic Git commit replay tool"),
-            Line::from("for the terminal."),
+            Line::from("Git review of your diffs, like a movie."),
             Line::from(""),
-            Line::from("https://github.com/unhappychoice/gitlogue"),
+            Line::from("https://github.com/Munasco/torvax"),
         ];
 
         let block = Block::default()

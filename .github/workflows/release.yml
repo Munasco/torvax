@@ -1,4 +1,4 @@
-name: Manual Release
+name: Release
 
 on:
   workflow_dispatch:
@@ -26,7 +26,6 @@ jobs:
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
-      tag_sha: ${{ steps.tag_sha.outputs.tag_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,67 +44,16 @@ jobs:
           cargo set-version --bump ${{ github.event.inputs.version_type }}
           NEW_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           echo "new_version=v$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "New version: v$NEW_VERSION"
 
-      - name: Run tests
-        run: cargo test
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-
-      - name: Update flake.nix
-        run: |
-          NEW_VERSION=$(echo "${{ steps.version.outputs.new_version }}" | sed 's/^v//')
-
-          # Update version in flake.nix
-          sed -i "s/version = \"[0-9.]\+\"/version = \"$NEW_VERSION\"/" flake.nix
-
-          # Calculate hash for source
-          nix flake prefetch --json github:unhappychoice/gitlogue/${{ steps.version.outputs.new_version }} > /tmp/prefetch.json || true
-
-          echo "Version updated in flake.nix to $NEW_VERSION"
-
-      - name: Create temporary tag
+      - name: Commit and tag
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add Cargo.toml Cargo.lock flake.nix
+          git add Cargo.toml Cargo.lock
           git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
           git tag ${{ steps.version.outputs.new_version }}
-
-      - name: Generate Changelog
-        run: |
-          chmod +x generate_changelog.sh
-          ./generate_changelog.sh
-
-      - name: Commit changelog and push
-        run: |
-          git add CHANGELOG.md
-          git commit --amend --no-edit
-          git tag -f ${{ steps.version.outputs.new_version }}
           git push origin main
           git push origin ${{ steps.version.outputs.new_version }}
-
-      - name: Resolve tag commit SHA
-        id: tag_sha
-        run: |
-          TAG_SHA=$(git rev-list -n 1 ${{ steps.version.outputs.new_version }})
-          echo "tag_sha=$TAG_SHA" >> $GITHUB_OUTPUT
-          echo "Tag commit SHA: $TAG_SHA"
-
-      - name: Extract Release Notes
-        id: extract_notes
-        run: |
-          VERSION=$(echo "${{ steps.version.outputs.new_version }}" | sed 's/^v//')
-          awk "/## \[$VERSION\]/{flag=1; next} /## \[/{flag=0} flag" CHANGELOG.md > release_notes.md
-          if [ ! -s release_notes.md ]; then
-            echo "## What's Changed" > release_notes.md
-            echo "" >> release_notes.md
-            echo "See the full changelog for details." >> release_notes.md
-          fi
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-          cat release_notes.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
         id: create_release
@@ -114,188 +62,124 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.version.outputs.new_version }}
-          name: Release ${{ steps.version.outputs.new_version }}
-          body: ${{ steps.extract_notes.outputs.RELEASE_NOTES }}
+          name: ${{ steps.version.outputs.new_version }}
           draft: false
           prerelease: false
 
-  build-and-upload:
-    name: Build and Upload
+  build:
+    name: Build — ${{ matrix.target }}
     needs: release
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release.outputs.new_version }}
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
         env:
           OPENSSL_VENDORED: 1
-      - name: Create archive (Unix)
-        if: matrix.os != 'windows-latest'
+
+      - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czf ../../../gitlogue-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.tar.gz gitlogue
-      - name: Create archive (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          Compress-Archive -Path gitlogue.exe -DestinationPath ../../../gitlogue-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.zip
-      - name: Upload Release Asset (Unix)
-        if: matrix.os != 'windows-latest'
-        uses: actions/upload-release-asset@v1
+          tar -czf ../../../torvax-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.tar.gz torvax
+
+      - name: Upload
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./gitlogue-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.tar.gz
-          asset_name: gitlogue-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.tar.gz
-          asset_content_type: application/gzip
-      - name: Upload Release Asset (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: ./gitlogue-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.zip
-          asset_name: gitlogue-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.zip
-          asset_content_type: application/zip
-
-  publish-crates:
-    name: Publish to crates.io
-    runs-on: ubuntu-latest
-    needs: [release, build-and-upload]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.release.outputs.new_version }}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-  update-flake-hashes:
-    name: Update flake.nix Hashes
-    runs-on: ubuntu-latest
-    needs: release
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
-      - uses: cachix/install-nix-action@v27
-
-      - name: Calculate and update hashes
-        run: |
-          VERSION=${{ needs.release.outputs.new_version }}
-
-          # Ensure we have the latest main
-          git pull origin main
-
-          # Calculate source hash
-          SRC_HASH=$(nix flake prefetch --json github:unhappychoice/gitlogue/$VERSION 2>/dev/null | jq -r .hash)
-          echo "Source hash: $SRC_HASH"
-
-          # Update source hash in flake.nix
-          sed -i "s|hash = \"sha256-[A-Za-z0-9+/=]\+\"|hash = \"$SRC_HASH\"|" flake.nix
-
-          # Try to build to get cargoHash (it will fail but show the correct hash)
-          nix build .#default 2>&1 | tee /tmp/build.log || true
-          CARGO_HASH=$(grep -oP "got:\s+\Ksha256-[A-Za-z0-9+/=]+" /tmp/build.log | head -1 || echo "")
-
-          if [ -n "$CARGO_HASH" ]; then
-            echo "Cargo hash: $CARGO_HASH"
-            sed -i "s|cargoHash = \"sha256-[A-Za-z0-9+/=]\+\"|cargoHash = \"$CARGO_HASH\"|" flake.nix
-          else
-            echo "Warning: Could not determine cargo hash"
-          fi
-
-      - name: Update flake.lock
-        run: nix flake lock
-
-      - name: Commit and push changes
-        run: |
-          VERSION=${{ needs.release.outputs.new_version }}
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add flake.nix flake.lock
-          git commit -m "chore: update flake.nix hashes for $VERSION" || echo "No changes to commit"
-          git push origin main
+          tag_name: ${{ needs.release.outputs.new_version }}
+          files: torvax-${{ needs.release.outputs.new_version }}-${{ matrix.target }}.tar.gz
 
   update-homebrew:
     name: Update Homebrew Formula
     runs-on: ubuntu-latest
-    needs: [release, build-and-upload]
+    needs: [release, build]
     steps:
-      - name: Checkout homebrew tap
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          repository: unhappychoice/homebrew-tap
+          repository: Munasco/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
-      - name: Update Homebrew formula
+      - name: Update formula
         run: |
           VERSION=${{ needs.release.outputs.new_version }}
+          REPO="Munasco/torvax"
 
-          MACOS_INTEL_URL="https://github.com/unhappychoice/gitlogue/releases/download/$VERSION/gitlogue-$VERSION-x86_64-apple-darwin.tar.gz"
-          MACOS_INTEL_SHA=$(curl -sL "$MACOS_INTEL_URL" | sha256sum | cut -d' ' -f1)
-
-          MACOS_ARM_URL="https://github.com/unhappychoice/gitlogue/releases/download/$VERSION/gitlogue-$VERSION-aarch64-apple-darwin.tar.gz"
+          MACOS_ARM_URL="https://github.com/$REPO/releases/download/$VERSION/torvax-$VERSION-aarch64-apple-darwin.tar.gz"
           MACOS_ARM_SHA=$(curl -sL "$MACOS_ARM_URL" | sha256sum | cut -d' ' -f1)
 
-          LINUX_INTEL_URL="https://github.com/unhappychoice/gitlogue/releases/download/$VERSION/gitlogue-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
-          LINUX_INTEL_SHA=$(curl -sL "$LINUX_INTEL_URL" | sha256sum | cut -d' ' -f1)
+          MACOS_X86_URL="https://github.com/$REPO/releases/download/$VERSION/torvax-$VERSION-x86_64-apple-darwin.tar.gz"
+          MACOS_X86_SHA=$(curl -sL "$MACOS_X86_URL" | sha256sum | cut -d' ' -f1)
 
-          LINUX_ARM_URL="https://github.com/unhappychoice/gitlogue/releases/download/$VERSION/gitlogue-$VERSION-aarch64-unknown-linux-gnu.tar.gz"
+          LINUX_X86_URL="https://github.com/$REPO/releases/download/$VERSION/torvax-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          LINUX_X86_SHA=$(curl -sL "$LINUX_X86_URL" | sha256sum | cut -d' ' -f1)
+
+          LINUX_ARM_URL="https://github.com/$REPO/releases/download/$VERSION/torvax-$VERSION-aarch64-unknown-linux-gnu.tar.gz"
           LINUX_ARM_SHA=$(curl -sL "$LINUX_ARM_URL" | sha256sum | cut -d' ' -f1)
 
-          echo "Calculated SHAs:"
-          echo "macOS Intel: $MACOS_INTEL_SHA"
-          echo "macOS ARM: $MACOS_ARM_SHA"
-          echo "Linux Intel: $LINUX_INTEL_SHA"
-          echo "Linux ARM: $LINUX_ARM_SHA"
+          cat > homebrew-tap/Formula/torvax.rb << EOF
+          class Gitlogue < Formula
+            desc "Git review of your diffs, like a movie"
+            homepage "https://github.com/$REPO"
+            version "${VERSION#v}"
+            license "ISC"
+
+            on_macos do
+              on_arm do
+                url "$MACOS_ARM_URL"
+                sha256 "$MACOS_ARM_SHA"
+              end
+              on_intel do
+                url "$MACOS_X86_URL"
+                sha256 "$MACOS_X86_SHA"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "$LINUX_ARM_URL"
+                sha256 "$LINUX_ARM_SHA"
+              end
+              on_intel do
+                url "$LINUX_X86_URL"
+                sha256 "$LINUX_X86_SHA"
+              end
+            end
+
+            def install
+              bin.install "torvax"
+            end
+
+            test do
+              system "#{bin}/torvax", "--version"
+            end
+          end
+          EOF
 
           cd homebrew-tap
-
-          sed -i "s|https://github.com/unhappychoice/gitlogue/releases/download/v[0-9.]\+/gitlogue-v[0-9.]\+-x86_64-apple-darwin.tar.gz|$MACOS_INTEL_URL|g" Formula/gitlogue.rb
-          sed -i "s|https://github.com/unhappychoice/gitlogue/releases/download/v[0-9.]\+/gitlogue-v[0-9.]\+-aarch64-apple-darwin.tar.gz|$MACOS_ARM_URL|g" Formula/gitlogue.rb
-          sed -i "s|https://github.com/unhappychoice/gitlogue/releases/download/v[0-9.]\+/gitlogue-v[0-9.]\+-x86_64-unknown-linux-gnu.tar.gz|$LINUX_INTEL_URL|g" Formula/gitlogue.rb
-          sed -i "s|https://github.com/unhappychoice/gitlogue/releases/download/v[0-9.]\+/gitlogue-v[0-9.]\+-aarch64-unknown-linux-gnu.tar.gz|$LINUX_ARM_URL|g" Formula/gitlogue.rb
-
-          FIRST_SHA_LINE=$(grep -n 'sha256 "' Formula/gitlogue.rb | head -1 | cut -d: -f1)
-          sed -i "${FIRST_SHA_LINE}s/sha256 \"[a-f0-9]\+\"/sha256 \"$MACOS_INTEL_SHA\"/" Formula/gitlogue.rb
-
-          SECOND_SHA_LINE=$(grep -n 'sha256 "' Formula/gitlogue.rb | head -2 | tail -1 | cut -d: -f1)
-          sed -i "${SECOND_SHA_LINE}s/sha256 \"[a-f0-9]\+\"/sha256 \"$MACOS_ARM_SHA\"/" Formula/gitlogue.rb
-
-          THIRD_SHA_LINE=$(grep -n 'sha256 "' Formula/gitlogue.rb | head -3 | tail -1 | cut -d: -f1)
-          sed -i "${THIRD_SHA_LINE}s/sha256 \"[a-f0-9]\+\"/sha256 \"$LINUX_INTEL_SHA\"/" Formula/gitlogue.rb
-
-          FOURTH_SHA_LINE=$(grep -n 'sha256 "' Formula/gitlogue.rb | head -4 | tail -1 | cut -d: -f1)
-          sed -i "${FOURTH_SHA_LINE}s/sha256 \"[a-f0-9]\+\"/sha256 \"$LINUX_ARM_SHA\"/" Formula/gitlogue.rb
-
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add Formula/gitlogue.rb
-          git commit -m "chore: update gitlogue to $VERSION"
+          git add Formula/torvax.rb
+          git commit -m "torvax $VERSION"
           git push

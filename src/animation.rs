@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use globset::{Glob, GlobMatcher};
 use rand::RngExt;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use unicode_width::UnicodeWidthStr;
 
 use crate::git::{CommitMetadata, DiffHunk, FileChange, FileStatus, LineChangeType};
@@ -620,6 +620,9 @@ impl AnimationEngine {
         self.state = AnimationState::Playing;
         self.last_update = Instant::now();
         self.pause_until = None;
+        self.finished_audio_chunks.clear();
+        self.current_audio_chunk = None;
+        self.audio_chunk_finished = false;
 
         // Check if this is a working tree diff (not a real commit)
         let is_working_tree = metadata.hash == "working-tree";
@@ -903,9 +906,12 @@ impl AnimationEngine {
             .map(|c| c.lines().collect())
             .unwrap_or_default();
 
-        // Get audio chunks for this file (if audio player is available)
+        // Get audio chunks for this file (only those with audio)
         let audio_chunks = if let Some(audio_player) = &self.audio_player {
             audio_player.get_chunks_for_file(&change.path)
+                .into_iter()
+                .filter(|c| c.has_audio)
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
@@ -914,10 +920,9 @@ impl AnimationEngine {
 
         // Process each hunk
         for (hunk_idx, hunk) in change.hunks.iter().enumerate() {
-            // Check if this hunk is within an audio chunk range
-            let hunk_line = hunk.old_start as usize;
+            // Match hunk to audio chunk by hunk index
             let matching_chunk = audio_chunks.iter().find(|chunk| {
-                hunk_line >= chunk.start_line && hunk_line <= chunk.end_line
+                chunk.hunk_indices.contains(&hunk_idx)
             });
 
             // If we've entered a new chunk, start its audio
@@ -925,14 +930,12 @@ impl AnimationEngine {
                 if current_chunk_id != Some(chunk.chunk_id) {
                     // If we were in a previous chunk, wait for it to finish first
                     if let Some(prev_chunk_id) = current_chunk_id {
-                        eprintln!("[ANIM] Inserting WaitForAudio for chunk {} (end of chunk)", prev_chunk_id);
                         self.steps.push(AnimationStep::WaitForAudio {
                             chunk_id: prev_chunk_id,
                         });
                     }
 
                     // Start the new chunk's audio
-                    eprintln!("[ANIM] Inserting StartAudio for chunk {} at hunk line {}", chunk.chunk_id, hunk_line);
                     self.steps.push(AnimationStep::StartAudio {
                         chunk_id: chunk.chunk_id,
                     });
@@ -983,7 +986,6 @@ impl AnimationEngine {
 
         // If we finished with a chunk still active, wait for it to complete
         if let Some(final_chunk_id) = current_chunk_id {
-            eprintln!("[ANIM] Inserting WaitForAudio for chunk {} (end of file)", final_chunk_id);
             self.steps.push(AnimationStep::WaitForAudio {
                 chunk_id: final_chunk_id,
             });
@@ -1209,7 +1211,6 @@ impl AnimationEngine {
                 self.finished_audio_chunks.insert(finished_chunk_id);
 
                 if self.current_audio_chunk == Some(finished_chunk_id) {
-                    eprintln!("[ANIM] Audio chunk {} finished, resuming animation", finished_chunk_id);
                     self.audio_chunk_finished();
                 }
             }
@@ -1330,7 +1331,6 @@ impl AnimationEngine {
             AnimationStep::StartAudio { chunk_id } => {
                 // Start playing this audio chunk (non-blocking - animation continues)
                 if let Some(audio_player) = &self.audio_player {
-                    eprintln!("[ANIM] Starting audio for chunk {} (animation continues)", chunk_id);
                     audio_player.trigger_chunk(chunk_id);
                 }
                 // Don't set current_audio_chunk yet - we're not waiting
@@ -1339,7 +1339,6 @@ impl AnimationEngine {
             AnimationStep::WaitForAudio { chunk_id } => {
                 // Check if this chunk already finished (audio was faster than animation)
                 if self.finished_audio_chunks.contains(&chunk_id) {
-                    eprintln!("[ANIM] Audio chunk {} already finished, continuing immediately", chunk_id);
                     self.next_step_delay = 0;
                     return; // Don't wait, continue immediately
                 }
@@ -1347,8 +1346,6 @@ impl AnimationEngine {
                 // Wait for this audio chunk to finish (blocking)
                 self.current_audio_chunk = Some(chunk_id);
                 self.audio_chunk_finished = false;
-
-                eprintln!("[ANIM] Waiting for audio chunk {} to finish", chunk_id);
 
                 // Pause animation until audio finishes
                 // We'll check audio_chunk_finished in tick()

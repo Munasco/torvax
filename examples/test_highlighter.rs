@@ -7,7 +7,7 @@ fn main() {
 "#;
 
     println!("=== Testing Rust highlighting ===");
-    let mut highlighter = gitlogue::syntax::Highlighter::new();
+    let mut highlighter = torvax::syntax::Highlighter::new();
     let success = highlighter.set_language_from_path("test.rs");
     println!("Language set: {}", success);
 
@@ -40,7 +40,7 @@ fn main() {
 "#;
 
     println!("\n=== Testing Markdown highlighting ===");
-    let mut md_highlighter = gitlogue::syntax::Highlighter::new();
+    let mut md_highlighter = torvax::syntax::Highlighter::new();
     let md_success = md_highlighter.set_language_from_path("test.md");
     println!("Language set: {}", md_success);
 

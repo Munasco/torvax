@@ -1260,7 +1260,7 @@ mod tests {
                     .as_nanos(),
                 COUNTER.fetch_add(1, Ordering::SeqCst)
             );
-            let path = std::env::temp_dir().join(format!("gitlogue_test_{}", unique_id));
+            let path = std::env::temp_dir().join(format!("torvax_test_{}", unique_id));
             if path.exists() {
                 std::fs::remove_dir_all(&path).unwrap();
             }
