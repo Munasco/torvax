@@ -82,6 +82,8 @@ pub struct EditorBuffer {
     /// Pre-calculated byte offsets for each line (handles CRLF correctly)
     pub old_content_line_offsets: Vec<usize>,
     pub new_content_line_offsets: Vec<usize>,
+    /// Track which lines are additions (for green highlighting)
+    pub added_lines: std::collections::HashSet<usize>,
 }
 
 impl EditorBuffer {
@@ -99,6 +101,7 @@ impl EditorBuffer {
             new_content_lines: Vec::new(),
             old_content_line_offsets: Vec::new(),
             new_content_line_offsets: Vec::new(),
+            added_lines: std::collections::HashSet::new(),
         }
     }
 
@@ -122,6 +125,7 @@ impl EditorBuffer {
             new_content_lines: Vec::new(),
             old_content_line_offsets: Vec::new(),
             new_content_line_offsets: Vec::new(),
+            added_lines: std::collections::HashSet::new(),
         }
     }
 
@@ -1308,6 +1312,9 @@ impl AnimationEngine {
                 self.buffer.cursor_line = line;
                 self.buffer.cursor_col = content_len;
 
+                // Mark this line as an addition (for green highlighting)
+                self.buffer.added_lines.insert(line);
+
                 // Track line offset for old_highlights mapping
                 self.line_offset += 1;
             }
@@ -1322,6 +1329,20 @@ impl AnimationEngine {
                     .get(line)
                     .map(|l| l.chars().take_while(|c| c.is_whitespace()).count())
                     .unwrap_or(0);
+
+                // Update added_lines set: remove the deleted line and shift down all lines after it
+                self.buffer.added_lines.remove(&line);
+                let lines_to_update: Vec<usize> = self
+                    .buffer
+                    .added_lines
+                    .iter()
+                    .filter(|&&l| l > line)
+                    .copied()
+                    .collect();
+                for old_line in lines_to_update {
+                    self.buffer.added_lines.remove(&old_line);
+                    self.buffer.added_lines.insert(old_line - 1);
+                }
 
                 // Track line offset for old_highlights mapping
                 self.line_offset -= 1;

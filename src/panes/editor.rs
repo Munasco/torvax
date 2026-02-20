@@ -23,6 +23,7 @@ struct HighlightContext<'a> {
     old_line_offsets: &'a [usize],
     new_line_offsets: &'a [usize],
     line_offset: isize,
+    is_added_line: bool,
     theme: &'a Theme,
 }
 
@@ -93,6 +94,8 @@ impl EditorPane {
         let show_cursor =
             is_cursor_line && engine.cursor_visible && engine.active_pane == ActivePane::Editor;
 
+        let is_added_line = engine.buffer.added_lines.contains(&line_num);
+
         let line_spans = self.highlight_line(HighlightContext {
             line_content,
             line_num,
@@ -104,6 +107,7 @@ impl EditorPane {
             old_line_offsets: &engine.buffer.old_content_line_offsets,
             new_line_offsets: &engine.buffer.new_content_line_offsets,
             line_offset: engine.line_offset,
+            is_added_line,
             theme,
         });
 
@@ -237,6 +241,12 @@ impl EditorPane {
                         .fg(ctx.theme.editor_cursor_char_fg)
                         .add_modifier(Modifier::BOLD),
                 ));
+            } else if ctx.is_added_line {
+                // Added line - show with green background
+                spans.push(Span::styled(
+                    ch.to_string(),
+                    Style::default().fg(color).bg(Color::Rgb(0, 64, 0)), // Dark green background
+                ));
             } else {
                 // Normal character
                 spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
@@ -251,6 +261,9 @@ impl EditorPane {
                     .fg(ctx.theme.editor_cursor_char_fg)
                     .add_modifier(Modifier::BOLD),
             ));
+        } else if ctx.is_added_line && ctx.cursor_col >= chars.len() {
+            // Extend green background to end of added line
+            spans.push(Span::styled(" ", Style::default().bg(Color::Rgb(0, 64, 0))));
         }
 
         spans
