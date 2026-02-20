@@ -177,6 +177,8 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Save your API keys and enable voiceover (run this first)
+    Setup,
     /// Theme management commands
     Theme {
         #[command(subcommand)]
@@ -268,6 +270,34 @@ impl Args {
     }
 }
 
+/// Interactively prompt for an API key, save it to config, and return it.
+fn prompt_for_key(label: &str, help_url: &str, config_field: &str) -> Option<String> {
+    use std::io::Write;
+    println!();
+    println!("torvax needs your {} to enable voiceover.", label);
+    println!("  Get yours at: {}", help_url);
+    print!("  Paste key (or press Enter to skip): ");
+    std::io::stdout().flush().ok();
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return None;
+    }
+
+    let key = input.trim().to_string();
+    if key.is_empty() {
+        println!("  Skipping voiceover.");
+        return None;
+    }
+
+    match config::Config::save_voiceover_key(config_field, &key) {
+        Ok(()) => println!("  Saved to ~/.config/torvax/config.toml"),
+        Err(e) => println!("  Warning: could not save key to config: {}", e),
+    }
+
+    Some(key)
+}
+
 /// Create audio player from config and CLI arguments
 fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioPlayer>>> {
     let mut voiceover_config = config.voiceover.clone();
@@ -323,23 +353,25 @@ fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioP
     
     if voiceover_config.enabled {
         if voiceover_config.openai_api_key.is_none() {
-            eprintln!("\ntorvax: OpenAI API key required for voiceover.");
-            eprintln!("  Get one at: https://platform.openai.com/api-keys");
-            eprintln!("  Then add to ~/.config/torvax/config.toml:");
-            eprintln!("    [voiceover]");
-            eprintln!("    openai_api_key = \"sk-...\"");
-            eprintln!("  Or set: export OPENAI_API_KEY=\"sk-...\"");
-            return Ok(None);
+            voiceover_config.openai_api_key = prompt_for_key(
+                "OpenAI API key (for GPT-5.2 explanations)",
+                "https://platform.openai.com/api-keys",
+                "openai_api_key",
+            );
+            if voiceover_config.openai_api_key.is_none() {
+                return Ok(None);
+            }
         }
 
         if voiceover_config.api_key.is_none() {
-            eprintln!("\ntorvax: Inworld API key required for voice narration.");
-            eprintln!("  Get one at: https://inworld.ai → API → Basic Auth key");
-            eprintln!("  Then add to ~/.config/torvax/config.toml:");
-            eprintln!("    [voiceover]");
-            eprintln!("    api_key = \"your-inworld-base64-key\"");
-            eprintln!("  Or set: export INWORLD_API_KEY=\"your-inworld-base64-key\"");
-            return Ok(None);
+            voiceover_config.api_key = prompt_for_key(
+                "Inworld API key (for text-to-speech)",
+                "https://inworld.ai  →  API  →  Basic Auth key",
+                "api_key",
+            );
+            if voiceover_config.api_key.is_none() {
+                return Ok(None);
+            }
         }
 
         match AudioPlayer::new(voiceover_config) {
@@ -366,6 +398,33 @@ fn main() -> Result<()> {
     // Handle subcommands
     if let Some(ref command) = args.command {
         match command {
+            Commands::Setup => {
+                println!("torvax setup — configure API keys for voiceover narration");
+                println!();
+
+                let openai_key = prompt_for_key(
+                    "OpenAI API key (GPT-5.2 generates the narration text)",
+                    "https://platform.openai.com/api-keys",
+                    "openai_api_key",
+                );
+
+                let inworld_key = prompt_for_key(
+                    "Inworld API key (text-to-speech)",
+                    "https://inworld.ai  →  API  →  Basic Auth key",
+                    "api_key",
+                );
+
+                // Also enable voiceover in config
+                if openai_key.is_some() || inworld_key.is_some() {
+                    let _ = config::Config::enable_voiceover();
+                    println!();
+                    println!("Setup complete. Run: torvax --voiceover --commit HEAD~5..HEAD");
+                } else {
+                    println!();
+                    println!("No keys saved. Re-run `torvax setup` when you have them.");
+                }
+                return Ok(());
+            }
             Commands::Theme { command } => match command {
                 ThemeCommands::List => {
                     println!("Available themes:");

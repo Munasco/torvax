@@ -210,6 +210,52 @@ impl Config {
         Ok(config_dir.join("config.toml"))
     }
 
+    /// Write a string key into the [voiceover] table without touching the rest of the file.
+    pub fn save_voiceover_key(field: &str, value: &str) -> Result<()> {
+        let config_path = Self::config_path()?;
+
+        let content = if config_path.exists() {
+            fs::read_to_string(&config_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+
+        if doc.get("voiceover").is_none() {
+            doc["voiceover"] = toml_edit::table();
+        }
+        doc["voiceover"][field] = toml_edit::value(value);
+
+        fs::write(&config_path, doc.to_string())?;
+        Ok(())
+    }
+
+    /// Enable voiceover in the [voiceover] table (sets enabled = true).
+    pub fn enable_voiceover() -> Result<()> {
+        let config_path = Self::config_path()?;
+
+        let content = if config_path.exists() {
+            fs::read_to_string(&config_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+
+        if doc.get("voiceover").is_none() {
+            doc["voiceover"] = toml_edit::table();
+        }
+        doc["voiceover"]["enabled"] = toml_edit::value(true);
+
+        fs::write(&config_path, doc.to_string())?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn themes_dir() -> Result<PathBuf> {
         let config_dir = dirs::home_dir()

@@ -126,6 +126,10 @@ torvax --author "john" --after "2024-01-01"
 
 Full config at `~/.config/torvax/config.toml`. See [Configuration Guide](docs/configuration.md).
 
+## Credits
+
+Torvax grew out of [gitlogue](https://github.com/Munasco/gitlogue) — the original git history screensaver that laid the foundation for the terminal animation engine, syntax highlighting, and commit replay system this project is built on.
+
 ## License
 
 ISC
