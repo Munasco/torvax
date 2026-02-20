@@ -198,23 +198,6 @@ pub fn generate_audio_chunks_with_progress(
     )
 }
 
-/// Pre-generate all audio chunks for a commit's file changes (blocking, Send-safe).
-///
-/// This is a free function instead of a method on `AudioPlayer` because
-/// `AudioPlayer` contains `OutputStream` which is `!Send`. The caller can
-/// extract the sendable parts via `voiceover_config()` and `chunks_handle()`
-/// and run this on a background thread.
-#[allow(dead_code)]
-pub fn generate_audio_chunks(
-    config: VoiceoverConfig,
-    chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
-    message: String,
-    file_changes: Vec<(String, String, FileStatus)>,
-    speed_ms: u64,
-) -> Vec<DiffChunk> {
-    generate_audio_chunks_impl(config, chunks_map, message, file_changes, speed_ms, None)
-}
-
 fn generate_audio_chunks_impl(
     config: VoiceoverConfig,
     chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
