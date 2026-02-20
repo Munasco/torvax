@@ -1,6 +1,6 @@
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -30,6 +30,7 @@ use crate::PlaybackOrder;
 enum UIState {
     Playing,
     WaitingForNext { resume_at: Instant },
+    GeneratingAudio,
     Menu,
     KeyBindings,
     About,
@@ -65,6 +66,9 @@ pub struct UI<'a> {
     menu_index: usize,
     prev_state: Option<Box<UIState>>,
     audio_player: Option<Arc<AudioPlayer>>,
+    audio_gen_handle: Option<std::thread::JoinHandle<()>>,
+    pending_metadata: Option<CommitMetadata>,
+    audio_progress: Arc<Mutex<String>>,
 }
 
 impl<'a> UI<'a> {
@@ -114,6 +118,9 @@ impl<'a> UI<'a> {
             menu_index: 0,
             prev_state: None,
             audio_player,
+            audio_gen_handle: None,
+            pending_metadata: None,
+            audio_progress: Arc::new(Mutex::new(String::new())),
         }
     }
 
@@ -172,9 +179,8 @@ impl<'a> UI<'a> {
         }
 
         // If audio is enabled, generate chunks in a background thread
-        // silently while the video plays (non-blocking).
-        // We extract only the Send-safe parts (config + chunks map) because
-        // AudioPlayer itself contains OutputStream which is !Send.
+        // and WAIT for completion before starting the video.
+        // Show progress modal during generation.
         if let Some(audio_player) = &self.audio_player {
             let config = audio_player.voiceover_config().clone();
             let chunks_map = audio_player.chunks_handle();
@@ -186,20 +192,24 @@ impl<'a> UI<'a> {
                 .collect();
             let message = metadata.message.clone();
             let speed_ms = self.speed_ms;
+            let progress = self.audio_progress.clone();
 
-            // Spawn audio generation in background, but DON'T block the UI
-            std::thread::spawn(move || {
-                crate::audio::generate_audio_chunks(
+            self.pending_metadata = Some(metadata);
+            self.state = UIState::GeneratingAudio;
+            self.audio_gen_handle = Some(std::thread::spawn(move || {
+                crate::audio::generate_audio_chunks_with_progress(
                     config,
                     chunks_map,
                     message,
                     file_changes,
                     speed_ms,
+                    progress,
                 );
-            });
+            }));
+            return;
         }
 
-        // Start the video immediately (audio will populate in background)
+        // No audio - start video immediately
         self.finish_play_commit(metadata);
     }
 
@@ -439,8 +449,8 @@ impl<'a> UI<'a> {
             self.engine.set_viewport_height(viewport_height);
             self.engine.set_content_width(content_width);
 
-            // Tick the animation engine
-            let needs_redraw = self.engine.tick();
+            // Tick the animation engine (force redraw during audio generation)
+            let needs_redraw = self.engine.tick() || matches!(self.state, UIState::GeneratingAudio);
 
             if needs_redraw {
                 terminal.draw(|f| self.render(f))?;
@@ -476,6 +486,26 @@ impl<'a> UI<'a> {
                                 self.state = UIState::Finished;
                             }
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                self.state = UIState::Finished;
+                            }
+                            _ => {}
+                        },
+                        UIState::GeneratingAudio => match key.code {
+                            // Skip audio generation - play without voiceover
+                            KeyCode::Esc | KeyCode::Char(' ') => {
+                                self.audio_gen_handle = None; // detach thread
+                                if let Some(metadata) = self.pending_metadata.take() {
+                                    self.finish_play_commit(metadata);
+                                }
+                            }
+                            KeyCode::Char('q') => {
+                                self.audio_gen_handle = None;
+                                self.pending_metadata = None;
+                                self.state = UIState::Finished;
+                            }
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                self.audio_gen_handle = None;
+                                self.pending_metadata = None;
                                 self.state = UIState::Finished;
                             }
                             _ => {}
@@ -527,6 +557,20 @@ impl<'a> UI<'a> {
                         }
 
                         self.advance_to_next_commit();
+                    }
+                }
+                UIState::GeneratingAudio => {
+                    // Check if background audio generation finished
+                    if self
+                        .audio_gen_handle
+                        .as_ref()
+                        .map(|h| h.is_finished())
+                        .unwrap_or(true)
+                    {
+                        let _ = self.audio_gen_handle.take().map(|h| h.join());
+                        if let Some(metadata) = self.pending_metadata.take() {
+                            self.finish_play_commit(metadata);
+                        }
                     }
                 }
                 UIState::Menu | UIState::KeyBindings | UIState::About => {
@@ -678,6 +722,7 @@ impl<'a> UI<'a> {
             UIState::Menu => self.render_menu(f, size),
             UIState::KeyBindings => self.render_keybindings(f, size),
             UIState::About => self.render_about(f, size),
+            UIState::GeneratingAudio => self.render_generating_audio(f, size),
             _ => {}
         }
     }
@@ -780,6 +825,43 @@ impl<'a> UI<'a> {
         let dialog_height = (lines.len() as u16) + 4;
         let area = Self::centered_rect(size, 48, dialog_height);
 
+        f.render_widget(Clear, area);
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
+    fn render_generating_audio(&self, f: &mut Frame, size: Rect) {
+        let progress = self
+            .audio_progress
+            .lock()
+            .ok()
+            .map(|p| p.clone())
+            .unwrap_or_else(|| "Initializing...".to_string());
+
+        let lines = vec![
+            Line::from(Span::styled(
+                "Generating voiceover narration",
+                Style::default().fg(self.theme.file_tree_current_file_fg),
+            )),
+            Line::from(""),
+            Line::from(progress),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Esc / Space  skip    q  quit",
+                Style::default().fg(self.theme.status_message),
+            )),
+        ];
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Preparing AI Voiceover ")
+            .padding(Padding::new(2, 2, 1, 1))
+            .style(
+                Style::default()
+                    .fg(self.theme.status_message)
+                    .bg(self.theme.editor_cursor_line_bg),
+            );
+
+        let area = Self::centered_rect(size, 60, 9);
         f.render_widget(Clear, area);
         f.render_widget(Paragraph::new(lines).block(block), area);
     }

@@ -176,18 +176,52 @@ impl AudioPlayer {
     }
 }
 
+/// Pre-generate all audio chunks with progress reporting.
+pub fn generate_audio_chunks_with_progress(
+    config: VoiceoverConfig,
+    chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
+    message: String,
+    file_changes: Vec<(String, String, FileStatus)>,
+    speed_ms: u64,
+    progress: Arc<Mutex<String>>,
+) -> Vec<DiffChunk> {
+    let _ = progress
+        .lock()
+        .map(|mut p| *p = "Analyzing repository...".to_string());
+    generate_audio_chunks_impl(
+        config,
+        chunks_map,
+        message,
+        file_changes,
+        speed_ms,
+        Some(progress),
+    )
+}
+
 /// Pre-generate all audio chunks for a commit's file changes (blocking, Send-safe).
 ///
 /// This is a free function instead of a method on `AudioPlayer` because
 /// `AudioPlayer` contains `OutputStream` which is `!Send`. The caller can
 /// extract the sendable parts via `voiceover_config()` and `chunks_handle()`
 /// and run this on a background thread.
+#[allow(dead_code)]
 pub fn generate_audio_chunks(
     config: VoiceoverConfig,
     chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
     message: String,
     file_changes: Vec<(String, String, FileStatus)>,
     speed_ms: u64,
+) -> Vec<DiffChunk> {
+    generate_audio_chunks_impl(config, chunks_map, message, file_changes, speed_ms, None)
+}
+
+fn generate_audio_chunks_impl(
+    config: VoiceoverConfig,
+    chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
+    message: String,
+    file_changes: Vec<(String, String, FileStatus)>,
+    speed_ms: u64,
+    progress: Option<Arc<Mutex<String>>>,
 ) -> Vec<DiffChunk> {
     if !config.enabled || config.api_key.is_none() {
         return Vec::new();
@@ -204,6 +238,12 @@ pub fn generate_audio_chunks(
     };
 
     rt.block_on(async {
+        if let Some(ref p) = progress {
+            let _ = p
+                .lock()
+                .map(|mut s| *s = "Generating project context with GPT...".to_string());
+        }
+
         let mut project_context = llm::extract_project_context();
 
         if config.use_llm_explanations && config.openai_api_key.is_some() {
@@ -239,6 +279,15 @@ pub fn generate_audio_chunks(
             })
             .collect();
 
+        if let Some(ref p) = progress {
+            let _ = p.lock().map(|mut s| {
+                *s = format!(
+                    "Ordering {} files by development flow...",
+                    important_files.len()
+                )
+            });
+        }
+
         let ordered = llm::order_files_by_development_flow(
             &config,
             &project_context,
@@ -249,8 +298,19 @@ pub fn generate_audio_chunks(
 
         let mut all_chunks: Vec<DiffChunk> = Vec::new();
         let mut global_id = 0usize;
+        let total_files = ordered.len();
 
         for (i, (filename, diff, _)) in ordered.iter().enumerate() {
+            if let Some(ref p) = progress {
+                let _ = p.lock().map(|mut s| {
+                    *s = format!(
+                        "Processing file {}/{}: {}",
+                        i + 1,
+                        total_files,
+                        filename.rsplit('/').next().unwrap_or(filename)
+                    )
+                });
+            }
             if i > 0 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             }
@@ -270,6 +330,19 @@ pub fn generate_audio_chunks(
                     global_id += 1;
 
                     let word_count = chunk.explanation.split_whitespace().count();
+
+                    if let Some(ref p) = progress {
+                        let _ = p.lock().map(|mut s| {
+                            *s = format!(
+                                "Synthesizing audio {}/{}: {} (chunk {})",
+                                i + 1,
+                                total_files,
+                                filename.rsplit('/').next().unwrap_or(filename),
+                                chunk.chunk_id + 1
+                            )
+                        });
+                    }
+
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
                     if let Ok(audio_data) =
