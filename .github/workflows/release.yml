@@ -74,17 +74,25 @@ jobs:
         include:
           - target: x86_64-apple-darwin
             os: macos-latest
+            alsa: false
           - target: aarch64-apple-darwin
             os: macos-latest
+            alsa: false
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
+            alsa: true
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
+            alsa: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.release.outputs.new_version }}
+
+      - name: Install ALSA dev (Linux)
+        if: matrix.alsa
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
         with:

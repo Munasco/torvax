@@ -299,25 +299,6 @@ impl CommitMetadata {
         indices
     }
 
-    /// Calculate total insertions and deletions across all changes
-    pub fn calculate_stats(&self) -> (usize, usize) {
-        let mut insertions = 0;
-        let mut deletions = 0;
-        
-        for change in &self.changes {
-            for hunk in &change.hunks {
-                for line_change in &hunk.lines {
-                    match line_change.change_type {
-                        LineChangeType::Addition => insertions += 1,
-                        LineChangeType::Deletion => deletions += 1,
-                        LineChangeType::Context => {},
-                    }
-                }
-            }
-        }
-        
-        (insertions, deletions)
-    }
 }
 
 impl GitRepository {
