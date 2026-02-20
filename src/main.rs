@@ -62,7 +62,11 @@ fn handle_subcommand(command: &Commands, args: &Args) -> Result<()> {
         } => {
             let repo_path = args.validate()?;
             let repo = GitRepository::open(&repo_path)?;
-            let mode = if *unstaged { DiffMode::Unstaged } else { DiffMode::Staged };
+            let mode = if *unstaged {
+                DiffMode::Unstaged
+            } else {
+                DiffMode::Staged
+            };
             let metadata = repo.get_working_tree_diff(mode)?;
 
             if metadata.changes.is_empty() {
@@ -81,12 +85,23 @@ fn handle_subcommand(command: &Commands, args: &Args) -> Result<()> {
             let background = background.unwrap_or(config.background);
             let loop_playback = loop_playback.unwrap_or(false);
             let mut theme = Theme::load(theme_name)?;
-            if !background { theme = theme.with_transparent_background(); }
+            if !background {
+                theme = theme.with_transparent_background();
+            }
 
             let audio_player = setup::create_audio_player(&config, args)?;
             let repo_ref = if loop_playback { Some(&repo) } else { None };
-            let mut ui = UI::new(speed, repo_ref, theme, PlaybackOrder::Asc, loop_playback,
-                                 None, false, speed_rules, audio_player);
+            let mut ui = UI::new(
+                speed,
+                repo_ref,
+                theme,
+                PlaybackOrder::Asc,
+                loop_playback,
+                None,
+                false,
+                speed_rules,
+                audio_player,
+            );
             ui.set_diff_mode(Some(mode));
             ui.load_commit(metadata);
             ui.run()?;
@@ -99,7 +114,9 @@ fn run_playback(args: Args) -> Result<()> {
     let repo_path = args.validate()?;
     let mut repo = GitRepository::open(&repo_path)?;
 
-    if args.author.is_some() { repo.set_author_filter(args.author.clone()); }
+    if args.author.is_some() {
+        repo.set_author_filter(args.author.clone());
+    }
 
     if let Some(ref s) = args.before {
         repo.set_before_filter(Some(git::parse_date(s)?));
@@ -108,16 +125,23 @@ fn run_playback(args: Args) -> Result<()> {
         repo.set_after_filter(Some(git::parse_date(s)?));
     }
 
-    let is_range = args.commit.as_ref().map(|c| c.contains("..")).unwrap_or(false);
+    let is_range = args
+        .commit
+        .as_ref()
+        .map(|c| c.contains(".."))
+        .unwrap_or(false);
     let is_filtered = args.author.is_some() || args.before.is_some() || args.after.is_some();
     let config = Config::load()?;
 
     let mut patterns = config.ignore_patterns.clone();
     if let Some(path) = &args.ignore_file {
         if let Ok(content) = std::fs::read_to_string(path) {
-            patterns.extend(content.lines()
-                .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-                .map(String::from));
+            patterns.extend(
+                content
+                    .lines()
+                    .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+                    .map(String::from),
+            );
         }
     }
     patterns.extend(args.ignore.clone());
@@ -137,9 +161,13 @@ fn run_playback(args: Args) -> Result<()> {
     }
 
     let mut theme = Theme::load(theme_name)?;
-    if !background { theme = theme.with_transparent_background(); }
+    if !background {
+        theme = theme.with_transparent_background();
+    }
 
-    if is_range { repo.set_commit_range(args.commit.as_ref().unwrap())?; }
+    if is_range {
+        repo.set_commit_range(args.commit.as_ref().unwrap())?;
+    }
 
     let metadata = if is_range {
         match order {
@@ -166,17 +194,23 @@ fn run_playback(args: Args) -> Result<()> {
         None
     };
 
-    let mut ui = UI::new(speed, repo_ref, theme, order, loop_playback,
-                         args.commit.clone(), is_range, speed_rules, audio_player);
+    let mut ui = UI::new(
+        speed,
+        repo_ref,
+        theme,
+        order,
+        loop_playback,
+        args.commit.clone(),
+        is_range,
+        speed_rules,
+        audio_player,
+    );
     ui.load_commit(metadata);
     ui.run()?;
     Ok(())
 }
 
-fn build_speed_rules(
-    cli_rules: &[String],
-    config_rules: &[String],
-) -> Vec<animation::SpeedRule> {
+fn build_speed_rules(cli_rules: &[String], config_rules: &[String]) -> Vec<animation::SpeedRule> {
     cli_rules
         .iter()
         .chain(config_rules.iter())

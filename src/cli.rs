@@ -20,28 +20,48 @@ pub enum PlaybackOrder {
     long_about = "torvax replays your git history as a narrated code walkthrough — AI explains what changed and why while the code types itself on screen."
 )]
 pub struct Args {
-    #[arg(short, long, value_name = "PATH",
-          help = "Path to Git repository (defaults to current directory)")]
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        help = "Path to Git repository (defaults to current directory)"
+    )]
     pub path: Option<PathBuf>,
 
-    #[arg(short, long, value_name = "HASH_OR_RANGE",
-          help = "Replay a specific commit or commit range (e.g., HEAD~5..HEAD or abc123..)")]
+    #[arg(
+        short,
+        long,
+        value_name = "HASH_OR_RANGE",
+        help = "Replay a specific commit or commit range (e.g., HEAD~5..HEAD or abc123..)"
+    )]
     pub commit: Option<String>,
 
-    #[arg(short, long, value_name = "MS",
-          help = "Typing speed in milliseconds per character (overrides config file)")]
+    #[arg(
+        short,
+        long,
+        value_name = "MS",
+        help = "Typing speed in milliseconds per character (overrides config file)"
+    )]
     pub speed: Option<u64>,
 
-    #[arg(short, long, value_name = "NAME",
-          help = "Theme to use (overrides config file)")]
+    #[arg(
+        short,
+        long,
+        value_name = "NAME",
+        help = "Theme to use (overrides config file)"
+    )]
     pub theme: Option<String>,
 
     #[arg(long, num_args = 0..=1, default_missing_value = "true", value_name = "BOOL",
           help = "Show background colors (use --background=false for transparent background)")]
     pub background: Option<bool>,
 
-    #[arg(long, value_enum, value_name = "ORDER",
-          help = "Commit playback order (overrides config file)")]
+    #[arg(
+        long,
+        value_enum,
+        value_name = "ORDER",
+        help = "Commit playback order (overrides config file)"
+    )]
     pub order: Option<PlaybackOrder>,
 
     #[arg(long = "loop", num_args = 0..=1, default_missing_value = "true", value_name = "BOOL",
@@ -60,12 +80,18 @@ pub struct Args {
           help = "Filter commits by author name or email (partial match, case-insensitive)")]
     pub author: Option<String>,
 
-    #[arg(long, value_name = "DATE",
-          help = "Show commits before this date (e.g., '2024-01-01', '1 week ago', 'yesterday')")]
+    #[arg(
+        long,
+        value_name = "DATE",
+        help = "Show commits before this date (e.g., '2024-01-01', '1 week ago', 'yesterday')"
+    )]
     pub before: Option<String>,
 
-    #[arg(long, value_name = "DATE",
-          help = "Show commits after this date (e.g., '2024-01-01', '1 week ago', 'yesterday')")]
+    #[arg(
+        long,
+        value_name = "DATE",
+        help = "Show commits after this date (e.g., '2024-01-01', '1 week ago', 'yesterday')"
+    )]
     pub after: Option<String>,
 
     #[arg(short = 'i', long = "ignore", value_name = "PATTERN",
@@ -73,8 +99,11 @@ pub struct Args {
           help = "Ignore files matching pattern (gitignore syntax, can be specified multiple times)")]
     pub ignore: Vec<String>,
 
-    #[arg(long = "ignore-file", value_name = "PATH",
-          help = "Path to file containing ignore patterns (one per line, like .gitignore)")]
+    #[arg(
+        long = "ignore-file",
+        value_name = "PATH",
+        help = "Path to file containing ignore patterns (one per line, like .gitignore)"
+    )]
     pub ignore_file: Option<PathBuf>,
 
     #[arg(long = "speed-rule", value_name = "PATTERN:MS",
@@ -86,12 +115,18 @@ pub struct Args {
           help = "Enable voiceover narration (Inworld TTS + GPT-5.2 explanations)")]
     pub voiceover: Option<bool>,
 
-    #[arg(long = "elevenlabs", conflicts_with = "voiceover_provider",
-          help = "Use ElevenLabs TTS instead of Inworld")]
+    #[arg(
+        long = "elevenlabs",
+        conflicts_with = "voiceover_provider",
+        help = "Use ElevenLabs TTS instead of Inworld"
+    )]
     pub elevenlabs: bool,
 
-    #[arg(long = "voiceover-provider", value_name = "PROVIDER",
-          help = "Voiceover provider to use: elevenlabs or inworld (overrides config file)")]
+    #[arg(
+        long = "voiceover-provider",
+        value_name = "PROVIDER",
+        help = "Voiceover provider to use: elevenlabs or inworld (overrides config file)"
+    )]
     pub voiceover_provider: Option<String>,
 
     #[command(subcommand)]
@@ -110,8 +145,12 @@ pub enum Commands {
         #[arg(long, help = "Show unstaged changes instead of staged")]
         unstaged: bool,
 
-        #[arg(short, long, value_name = "MS",
-              help = "Typing speed in milliseconds per character")]
+        #[arg(
+            short,
+            long,
+            value_name = "MS",
+            help = "Typing speed in milliseconds per character"
+        )]
         speed: Option<u64>,
 
         #[arg(short, long, value_name = "NAME", help = "Theme to use")]
@@ -155,7 +194,9 @@ impl Args {
         if !start_path.exists() {
             anyhow::bail!("Path does not exist: {}", start_path.display());
         }
-        let canonical = start_path.canonicalize().context("Failed to resolve path")?;
+        let canonical = start_path
+            .canonicalize()
+            .context("Failed to resolve path")?;
         Self::find_git_root(&canonical).ok_or_else(|| {
             anyhow::anyhow!(
                 "Not a Git repository: {} (or any parent directories)",

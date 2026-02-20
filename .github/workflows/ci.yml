@@ -75,12 +75,3 @@ jobs:
         with:
           prefix-key: v1-rust
       - run: cargo build --release
-
-  nix-build:
-    name: Nix Build
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v27
-      - name: Build unstable package
-        run: nix build .#unstable

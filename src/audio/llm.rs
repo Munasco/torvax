@@ -1,15 +1,14 @@
+use super::types::{ProjectContext, VoiceoverConfig};
+use crate::git::FileStatus;
 use anyhow::{Context, Result};
 use async_openai::{
-    Client,
     config::OpenAIConfig,
     types::{
-        ChatCompletionRequestMessage,
-        ChatCompletionRequestUserMessageArgs,
+        ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs,
         CreateChatCompletionRequestArgs,
     },
+    Client,
 };
-use crate::git::FileStatus;
-use super::types::{ProjectContext, VoiceoverConfig};
 
 /// Build a ProjectContext from the local repo (repo_name filled, description empty until LLM runs)
 pub fn extract_project_context() -> ProjectContext {
@@ -19,7 +18,10 @@ pub fn extract_project_context() -> ProjectContext {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             .unwrap_or_else(|| "repository".to_string())
     });
-    ProjectContext { repo_name, description: String::new() }
+    ProjectContext {
+        repo_name,
+        description: String::new(),
+    }
 }
 
 /// Generate a TTS-friendly project description via GPT
@@ -182,7 +184,13 @@ pub async fn order_files_by_development_flow(
                 FileStatus::Copied => "copied",
                 FileStatus::Unmodified => "unchanged",
             };
-            format!("{}: {} ({}, {} diff lines)", i, name, s, diff.lines().count())
+            format!(
+                "{}: {} ({}, {} diff lines)",
+                i,
+                name,
+                s,
+                diff.lines().count()
+            )
         })
         .collect();
 
@@ -205,7 +213,10 @@ pub async fn order_files_by_development_flow(
     let request = match CreateChatCompletionRequestArgs::default()
         .model("gpt-5.2")
         .messages(vec![ChatCompletionRequestMessage::User(
-            match ChatCompletionRequestUserMessageArgs::default().content(prompt).build() {
+            match ChatCompletionRequestUserMessageArgs::default()
+                .content(prompt)
+                .build()
+            {
                 Ok(m) => m,
                 Err(_) => return files.to_vec(),
             },
@@ -220,7 +231,11 @@ pub async fn order_files_by_development_flow(
 
     match client.chat().create(request).await {
         Ok(response) => {
-            if let Some(content) = response.choices.first().and_then(|c| c.message.content.as_ref()) {
+            if let Some(content) = response
+                .choices
+                .first()
+                .and_then(|c| c.message.content.as_ref())
+            {
                 if let Ok(indices) = serde_json::from_str::<Vec<usize>>(content.trim()) {
                     let mut ordered = Vec::with_capacity(files.len());
                     let mut used = std::collections::HashSet::new();
@@ -230,7 +245,9 @@ pub async fn order_files_by_development_flow(
                         }
                     }
                     for (i, file) in files.iter().enumerate() {
-                        if !used.contains(&i) { ordered.push(file.clone()); }
+                        if !used.contains(&i) {
+                            ordered.push(file.clone());
+                        }
                     }
                     return ordered;
                 }

@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose};
 use super::types::{VoiceoverConfig, VoiceoverProvider};
+use anyhow::{Context, Result};
+use base64::{engine::general_purpose, Engine as _};
 
 /// Dispatch TTS to the configured provider
 pub async fn synthesize_speech_from_text(config: &VoiceoverConfig, text: &str) -> Result<Vec<u8>> {

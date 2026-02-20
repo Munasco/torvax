@@ -1,8 +1,8 @@
+use crate::audio::VoiceoverConfig;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use crate::audio::VoiceoverConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {

@@ -298,7 +298,6 @@ impl CommitMetadata {
         });
         indices
     }
-
 }
 
 impl GitRepository {

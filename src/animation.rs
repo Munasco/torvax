@@ -184,10 +184,10 @@ pub enum AnimationStep {
         multiplier: f64,
     },
     StartAudio {
-        chunk_id: usize,  // Start playing this audio chunk (non-blocking)
+        chunk_id: usize, // Start playing this audio chunk (non-blocking)
     },
     WaitForAudio {
-        chunk_id: usize,  // Wait for this audio chunk to finish (blocking)
+        chunk_id: usize, // Wait for this audio chunk to finish (blocking)
     },
     SwitchFile {
         file_index: usize,
@@ -914,7 +914,8 @@ impl AnimationEngine {
 
         // Get audio chunks for this file (only those with audio)
         let audio_chunks = if let Some(audio_player) = &self.audio_player {
-            audio_player.get_chunks_for_file(&change.path)
+            audio_player
+                .get_chunks_for_file(&change.path)
                 .into_iter()
                 .filter(|c| c.has_audio)
                 .collect::<Vec<_>>()
@@ -927,9 +928,9 @@ impl AnimationEngine {
         // Process each hunk
         for (hunk_idx, hunk) in change.hunks.iter().enumerate() {
             // Match hunk to audio chunk by hunk index
-            let matching_chunk = audio_chunks.iter().find(|chunk| {
-                chunk.hunk_indices.contains(&hunk_idx)
-            });
+            let matching_chunk = audio_chunks
+                .iter()
+                .find(|chunk| chunk.hunk_indices.contains(&hunk_idx));
 
             // If we've entered a new chunk, start its audio
             if let Some(chunk) = matching_chunk {
@@ -1381,7 +1382,8 @@ impl AnimationEngine {
 
                 // Trigger voiceover for file open
                 if let Some(audio_player) = &self.audio_player {
-                    audio_player.trigger_voiceover(crate::audio::VoiceoverTrigger::FileOpen(path.clone()));
+                    audio_player
+                        .trigger_voiceover(crate::audio::VoiceoverTrigger::FileOpen(path.clone()));
                 }
 
                 // Update typing speed based on file-specific rules

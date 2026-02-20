@@ -1,15 +1,14 @@
+use super::llm::{calculate_animation_duration, words_for_duration};
+use super::types::{DiffChunk, ProjectContext, VoiceoverConfig};
 use anyhow::{Context, Result};
 use async_openai::{
-    Client,
     config::OpenAIConfig,
     types::{
-        ChatCompletionRequestMessage,
-        ChatCompletionRequestUserMessageArgs,
+        ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs,
         CreateChatCompletionRequestArgs,
     },
+    Client,
 };
-use super::types::{DiffChunk, ProjectContext, VoiceoverConfig};
-use super::llm::{calculate_animation_duration, words_for_duration};
 
 /// Split a file diff into semantic chunks, each with an LLM explanation sized to match
 /// the animation duration for that chunk.
@@ -32,7 +31,16 @@ pub async fn split_diff_into_chunks(
     let chunk_groups: Vec<Vec<usize>> = if hunks.len() <= 1 {
         vec![(0..hunks.len()).collect()]
     } else {
-        llm_group_hunks(api_key, config, project_context, commit_message, filename, &hunk_summaries, &hunks).await?
+        llm_group_hunks(
+            api_key,
+            config,
+            project_context,
+            commit_message,
+            filename,
+            &hunk_summaries,
+            &hunks,
+        )
+        .await?
     };
 
     let cfg = OpenAIConfig::new().with_api_key(api_key);
@@ -143,8 +151,14 @@ fn parse_hunks(diff: &str) -> (Vec<Vec<&str>>, Vec<String>) {
         .enumerate()
         .map(|(i, lines)| {
             let header = lines.first().unwrap_or(&"");
-            let adds = lines.iter().filter(|l| l.starts_with('+') && !l.starts_with("+++")).count();
-            let dels = lines.iter().filter(|l| l.starts_with('-') && !l.starts_with("---")).count();
+            let adds = lines
+                .iter()
+                .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+                .count();
+            let dels = lines
+                .iter()
+                .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+                .count();
             let preview: Vec<&str> = lines
                 .iter()
                 .skip(1)
@@ -152,7 +166,14 @@ fn parse_hunks(diff: &str) -> (Vec<Vec<&str>>, Vec<String>) {
                 .take(3)
                 .copied()
                 .collect();
-            format!("Hunk {}: {} — {} additions, {} deletions\n  Preview: {}", i, header, adds, dels, preview.join(" | "))
+            format!(
+                "Hunk {}: {} — {} additions, {} deletions\n  Preview: {}",
+                i,
+                header,
+                adds,
+                dels,
+                preview.join(" | ")
+            )
         })
         .collect();
 
@@ -178,7 +199,11 @@ async fn llm_group_hunks(
         (e.g. imports, a new function, config updates). Keep related hunks together.\n\n\
         Respond with ONLY JSON: {{\"chunks\": [[0, 1], [2], [3, 4]]}}",
         project_context.repo_name,
-        &project_context.description.chars().take(300).collect::<String>(),
+        &project_context
+            .description
+            .chars()
+            .take(300)
+            .collect::<String>(),
         commit_message,
         filename,
         hunk_summaries.join("\n")

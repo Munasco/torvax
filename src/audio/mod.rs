@@ -1,11 +1,10 @@
-pub mod types;
 pub(crate) mod chunker;
 pub(crate) mod llm;
 pub(crate) mod tts;
+pub mod types;
 
 pub use types::{
-    DiffChunk, VoiceoverConfig, VoiceoverProvider, VoiceoverSegment,
-    VoiceoverTrigger,
+    DiffChunk, VoiceoverConfig, VoiceoverProvider, VoiceoverSegment, VoiceoverTrigger,
 };
 
 use anyhow::{Context, Result};
@@ -44,10 +43,9 @@ impl AudioPlayer {
             });
         }
 
-        let (_stream, stream_handle) = OutputStream::try_default()
-            .context("Failed to create audio output stream")?;
-        let sink =
-            Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
+        let (_stream, stream_handle) =
+            OutputStream::try_default().context("Failed to create audio output stream")?;
+        let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
         sink.play();
 
         Ok(Self {
@@ -76,7 +74,12 @@ impl AudioPlayer {
     pub fn get_chunks_for_file(&self, file_path: &str) -> Vec<DiffChunk> {
         self.chunks
             .lock()
-            .map(|g| g.values().filter(|c| c.file_path == file_path).cloned().collect())
+            .map(|g| {
+                g.values()
+                    .filter(|c| c.file_path == file_path)
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -94,120 +97,35 @@ impl AudioPlayer {
             if let Some(chunk) = chunk {
                 if let Some(audio_data) = chunk.audio_data {
                     if let Some(sink_arc) = sink {
-                        if let Ok(sink_guard) = sink_arc.lock() {
+                        // Append source and release the lock immediately so
+                        // pause()/resume() on the main thread are never blocked.
+                        let duration_ms = {
+                            let Ok(guard) = sink_arc.lock() else { return };
                             let cursor = std::io::Cursor::new(audio_data);
-                            if let Ok(source) = Decoder::new(cursor) {
-                                sink_guard.append(source);
-                                sink_guard.play();
-                                let ms = (chunk.audio_duration_secs * 1000.0) as u64;
-                                thread::sleep(std::time::Duration::from_millis(ms));
-                                let _ = tx.send(chunk_id);
-                            }
-                        }
+                            let Ok(source) = Decoder::new(cursor) else {
+                                return;
+                            };
+                            guard.append(source);
+                            guard.play();
+                            (chunk.audio_duration_secs * 1000.0) as u64
+                        }; // lock released
+
+                        thread::sleep(std::time::Duration::from_millis(duration_ms));
+                        let _ = tx.send(chunk_id);
                     }
                 }
             }
         });
     }
 
-    /// Pre-generate all audio chunks for a commit's file changes (blocking)
-    pub fn generate_audio_chunks(
-        &self,
-        _commit_hash: String,
-        _author: String,
-        message: String,
-        file_changes: Vec<(String, String, FileStatus)>,
-        speed_ms: u64,
-    ) -> Vec<DiffChunk> {
-        if !self.config.enabled || self.config.api_key.is_none() {
-            return Vec::new();
-        }
+    /// Access the voiceover config (for use outside the player).
+    pub fn voiceover_config(&self) -> &VoiceoverConfig {
+        &self.config
+    }
 
-        let config = self.config.clone();
-        let chunks_map = self.chunks.clone();
-
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(_) => return Vec::new(),
-        };
-
-        rt.block_on(async {
-            let mut project_context = llm::extract_project_context();
-
-            if config.use_llm_explanations && config.openai_api_key.is_some() {
-                match llm::generate_project_context_with_llm(&config).await {
-                    Ok(desc) => project_context.description = desc,
-                    Err(_) => return Vec::new(),
-                }
-            } else {
-                return Vec::new();
-            }
-
-            let important_files: Vec<(String, String, FileStatus)> = file_changes
-                .into_iter()
-                .filter(|(name, _, _)| {
-                    !name.contains("package-lock.json")
-                        && !name.contains("yarn.lock")
-                        && !name.contains("pnpm-lock.yaml")
-                        && !name.ends_with(".lock")
-                        && !name.ends_with(".json")
-                })
-                .take(5)
-                .collect();
-
-            let ordered = llm::order_files_by_development_flow(
-                &config, &project_context, &message, &important_files,
-            )
-            .await;
-
-            let mut all_chunks: Vec<DiffChunk> = Vec::new();
-            let mut global_id = 0usize;
-
-            for (i, (filename, diff, _)) in ordered.iter().enumerate() {
-                if i > 0 {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-                }
-
-                if let Ok(mut file_chunks) = chunker::split_diff_into_chunks(
-                    &config, &project_context, &message, filename, diff, speed_ms,
-                )
-                .await
-                {
-                    for chunk in &mut file_chunks {
-                        chunk.chunk_id = global_id;
-                        global_id += 1;
-
-                        let word_count = chunk.explanation.split_whitespace().count();
-                        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-
-                        if let Ok(audio_data) =
-                            tts::synthesize_speech_from_text(&config, &chunk.explanation).await
-                        {
-                            let real_duration = {
-                                let cursor = std::io::Cursor::new(audio_data.clone());
-                                Decoder::new(cursor)
-                                    .ok()
-                                    .and_then(|s| s.total_duration())
-                                    .map(|d| d.as_secs_f32())
-                            };
-                            chunk.audio_duration_secs =
-                                real_duration.unwrap_or((word_count as f32) / 2.5);
-                            chunk.audio_data = Some(audio_data);
-                            chunk.has_audio = true;
-                        }
-                    }
-                    all_chunks.extend(file_chunks);
-                }
-            }
-
-            if let Ok(mut guard) = chunks_map.lock() {
-                for chunk in &all_chunks {
-                    guard.insert(chunk.chunk_id, chunk.clone());
-                }
-            }
-
-            all_chunks
-        })
+    /// Clone the shared chunks map (Send-safe, unlike AudioPlayer itself).
+    pub fn chunks_handle(&self) -> Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>> {
+        self.chunks.clone()
     }
 
     /// Trigger a queued voiceover segment (e.g. on file open)
@@ -220,7 +138,9 @@ impl AudioPlayer {
 
         thread::spawn(move || {
             let segment = queue.lock().ok().and_then(|mut q| {
-                q.iter().position(|s| s.trigger_type == trigger_type).map(|i| q.remove(i).unwrap())
+                q.iter()
+                    .position(|s| s.trigger_type == trigger_type)
+                    .map(|i| q.remove(i).unwrap())
             });
 
             if let Some(seg) = segment {
@@ -254,4 +174,130 @@ impl AudioPlayer {
             }
         }
     }
+}
+
+/// Pre-generate all audio chunks for a commit's file changes (blocking, Send-safe).
+///
+/// This is a free function instead of a method on `AudioPlayer` because
+/// `AudioPlayer` contains `OutputStream` which is `!Send`. The caller can
+/// extract the sendable parts via `voiceover_config()` and `chunks_handle()`
+/// and run this on a background thread.
+pub fn generate_audio_chunks(
+    config: VoiceoverConfig,
+    chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
+    message: String,
+    file_changes: Vec<(String, String, FileStatus)>,
+    speed_ms: u64,
+) -> Vec<DiffChunk> {
+    if !config.enabled || config.api_key.is_none() {
+        return Vec::new();
+    }
+
+    // Clear stale chunks from any previous commit
+    if let Ok(mut guard) = chunks_map.lock() {
+        guard.clear();
+    }
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(_) => return Vec::new(),
+    };
+
+    rt.block_on(async {
+        let mut project_context = llm::extract_project_context();
+
+        if config.use_llm_explanations && config.openai_api_key.is_some() {
+            match llm::generate_project_context_with_llm(&config).await {
+                Ok(desc) => project_context.description = desc,
+                Err(_) => return Vec::new(),
+            }
+        } else {
+            return Vec::new();
+        }
+
+        let important_files: Vec<(String, String, FileStatus)> = file_changes
+            .into_iter()
+            .filter(|(name, _, _)| {
+                // Exclude lock files
+                !name.contains("package-lock.json")
+                    && !name.contains("yarn.lock")
+                    && !name.contains("pnpm-lock.yaml")
+                    && !name.ends_with(".lock")
+                    // Exclude JSON config/data files
+                    && !name.ends_with(".json")
+                    // Exclude Xcode project files
+                    && !name.ends_with(".xcodeproj")
+                    && !name.ends_with(".pbxproj")
+                    && !name.ends_with(".xcworkspace")
+                    // Exclude IDE/editor config
+                    && !name.contains(".vscode/")
+                    && !name.contains(".idea/")
+                    // Exclude build artifacts
+                    && !name.contains("/dist/")
+                    && !name.contains("/build/")
+                    && !name.contains("/target/")
+            })
+            .collect();
+
+        let ordered = llm::order_files_by_development_flow(
+            &config,
+            &project_context,
+            &message,
+            &important_files,
+        )
+        .await;
+
+        let mut all_chunks: Vec<DiffChunk> = Vec::new();
+        let mut global_id = 0usize;
+
+        for (i, (filename, diff, _)) in ordered.iter().enumerate() {
+            if i > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            }
+
+            if let Ok(mut file_chunks) = chunker::split_diff_into_chunks(
+                &config,
+                &project_context,
+                &message,
+                filename,
+                diff,
+                speed_ms,
+            )
+            .await
+            {
+                for chunk in &mut file_chunks {
+                    chunk.chunk_id = global_id;
+                    global_id += 1;
+
+                    let word_count = chunk.explanation.split_whitespace().count();
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+
+                    if let Ok(audio_data) =
+                        tts::synthesize_speech_from_text(&config, &chunk.explanation).await
+                    {
+                        let real_duration = {
+                            let cursor = std::io::Cursor::new(audio_data.clone());
+                            Decoder::new(cursor)
+                                .ok()
+                                .and_then(|s| s.total_duration())
+                                .map(|d| d.as_secs_f32())
+                        };
+                        chunk.audio_duration_secs =
+                            real_duration.unwrap_or((word_count as f32) / 2.5);
+                        chunk.audio_data = Some(audio_data);
+                        chunk.has_audio = true;
+                    }
+                }
+                all_chunks.extend(file_chunks);
+            }
+        }
+
+        if let Ok(mut guard) = chunks_map.lock() {
+            for chunk in &all_chunks {
+                guard.insert(chunk.chunk_id, chunk.clone());
+            }
+        }
+
+        all_chunks
+    })
 }
