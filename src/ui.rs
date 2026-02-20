@@ -491,13 +491,6 @@ impl<'a> UI<'a> {
                             _ => {}
                         },
                         UIState::GeneratingAudio => match key.code {
-                            // Skip audio generation - play without voiceover
-                            KeyCode::Esc | KeyCode::Char(' ') => {
-                                self.audio_gen_handle = None; // detach thread
-                                if let Some(metadata) = self.pending_metadata.take() {
-                                    self.finish_play_commit(metadata);
-                                }
-                            }
                             KeyCode::Char('q') => {
                                 self.audio_gen_handle = None;
                                 self.pending_metadata = None;
@@ -846,7 +839,7 @@ impl<'a> UI<'a> {
             Line::from(progress),
             Line::from(""),
             Line::from(Span::styled(
-                "Esc / Space  skip    q  quit",
+                "q  quit",
                 Style::default().fg(self.theme.status_message),
             )),
         ];
