@@ -169,9 +169,9 @@ impl Config {
                  [voiceover]\n\
                  enabled = {}\n\
                  provider = \"{}\"  # Options: \"inworld\" (default) or \"elevenlabs\"\n\
-                 use_llm_explanations = {}  # Use Gemini to generate detailed teaching explanations\n\
+                 use_llm_explanations = {}  # Use OpenAI GPT-5.2 to generate detailed teaching explanations\n\
                  # api_key = \"your-base64-api-key\"  # TTS provider API key (or use INWORLD_API_KEY/ELEVENLABS_API_KEY env var)\n\
-                 # gemini_api_key = \"your-gemini-key\"  # Gemini API key (required for LLM explanations, or use GEMINI_API_KEY env var)\n\
+                 # openai_api_key = \"your-openai-key\"  # OpenAI API key (required for LLM explanations, or use OPENAI_API_KEY env var)\n\
                  # voice_id = \"Ashley\"  # Optional: Inworld voice ID (default: Ashley) or ElevenLabs voice ID\n\
                  # model_id = \"inworld-tts-1.5-max\"  # Optional: Inworld model (default) or ElevenLabs model\n",
                 self.theme,

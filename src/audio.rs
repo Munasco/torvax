@@ -1,11 +1,21 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::collections::VecDeque;
 use rodio::{Decoder, OutputStream, Sink};
 use crate::git::FileStatus;
 use base64::{Engine as _, engine::general_purpose};
+use async_openai::{
+    Client,
+    config::OpenAIConfig,
+    types::{
+        ChatCompletionRequestMessage,
+        ChatCompletionRequestUserMessageArgs,
+        CreateChatCompletionRequestArgs,
+    }
+};
 
 /// Configuration for voiceover providers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,7 +25,7 @@ pub struct VoiceoverConfig {
     pub api_key: Option<String>,
     pub voice_id: Option<String>,
     pub model_id: Option<String>,
-    pub gemini_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
     pub use_llm_explanations: bool,
 }
 
@@ -50,7 +60,7 @@ impl Default for VoiceoverConfig {
             api_key: None,
             voice_id: None,
             model_id: None,
-            gemini_api_key: None,
+            openai_api_key: None,
             use_llm_explanations: false,
         }
     }
@@ -75,19 +85,27 @@ fn extract_project_context() -> ProjectContext {
 /// Generate AI-powered project description using Gemini (async version)
 async fn generate_project_context_with_llm(config: &VoiceoverConfig) -> Result<String> {
     let api_key = config
-        .gemini_api_key
+        .openai_api_key
         .as_ref()
-        .context("Gemini API key not configured")?;
+        .context("OpenAI API key not configured")?;
 
     // Sample key files from repository (deepwiki principle)
     let mut context_files = Vec::new();
 
-    // Prioritize these files for context
-    let key_files = ["README.md", "Cargo.toml", "package.json", "src/main.rs", "src/lib.rs"];
+    // Prioritize these files for context - take substantial content for full understanding
+    let key_files = [
+        ("Cargo.toml", 5000),      // Full manifest
+        ("package.json", 5000),    // Full package config
+        ("src/main.rs", 8000),     // Main entry point - take more
+        ("src/lib.rs", 8000),      // Library root - take more
+        ("src/index.ts", 8000),    // TypeScript entry
+        ("main.py", 8000),         // Python entry
+        ("README.md", 3000),       // Overview but not too long
+    ];
 
-    for file_path in key_files {
+    for (file_path, max_chars) in key_files {
         if let Ok(content) = std::fs::read_to_string(file_path) {
-            let preview = content.chars().take(500).collect::<String>();
+            let preview = content.chars().take(max_chars).collect::<String>();
             context_files.push(format!("File: {}\n{}", file_path, preview));
         }
     }
@@ -98,52 +116,53 @@ async fn generate_project_context_with_llm(config: &VoiceoverConfig) -> Result<S
 
     let repo_context = context_files.join("\n\n---\n\n");
 
-    // Use Gemini to generate project description
+    // Use OpenAI GPT-5.2 to generate project description
     let prompt = format!(
-        "You are analyzing a code repository. Based on the following files, provide a thorough \
-        description (200-400 words) of what this project does, its main purpose, key features, \
-        and architecture. This will be used to provide context for teaching someone about code changes.\n\n\
+        "You are analyzing a code repository using the DeepWiki principle. Based on the key files below, \
+        provide a comprehensive technical description (300-500 words) covering:\n\
+        1. What this project does and its core purpose\n\
+        2. Main architecture and tech stack\n\
+        3. Key components and how they interact\n\
+        4. Important patterns or design decisions\n\n\
+        IMPORTANT: Write for TEXT-TO-SPEECH pronunciation. Use natural spoken language:\n\
+        - Say 'Node' not 'Node.js' or 'Node dot JS'\n\
+        - Say 'TypeScript' not 'TS'\n\
+        - Say 'React' not 'React.js'\n\
+        - Avoid symbols, abbreviations, file extensions when possible\n\
+        - Write how developers actually speak about code\n\n\
+        This context will be used in voice narration, so be specific and technical but naturally speakable.\n\n\
         Repository files:\n{}\n\n\
-        Provide ONLY the description, no additional commentary. Be detailed enough to give full context.",
+        Provide ONLY the description, no preamble or meta-commentary.",
         repo_context
     );
 
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={}",
-        api_key
-    );
+    let config = OpenAIConfig::new().with_api_key(api_key);
+    let client = Client::with_config(config);
 
-    let client = reqwest::Client::new();
+    let request = CreateChatCompletionRequestArgs::default()
+        .model("gpt-5.2")
+        .messages(vec![
+            ChatCompletionRequestMessage::User(
+                ChatCompletionRequestUserMessageArgs::default()
+                    .content(prompt)
+                    .build()?
+            )
+        ])
+        .temperature(0.5)
+        .max_completion_tokens(2048u32)
+        .build()?;
+
     let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }],
-            "generationConfig": {
-                "temperature": 0.5,
-                "maxOutputTokens": 800  // Doubled for fuller project descriptions
-            }
-        }))
-        .send()
+        .chat()
+        .create(request)
         .await
-        .context("Failed to send request to Gemini API")?;
+        .context("Failed to call OpenAI API")?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        anyhow::bail!("Gemini API error ({}): {}", status, error_text);
-    }
-
-    let response_json: serde_json::Value = response
-        .json()
-        .await
-        .context("Failed to parse Gemini response")?;
-
-    let description = response_json["candidates"][0]["content"]["parts"][0]["text"]
-        .as_str()
-        .context("Failed to extract description from Gemini response")?
+    let description = response
+        .choices
+        .first()
+        .and_then(|choice| choice.message.content.as_ref())
+        .context("No content in OpenAI response")?
         .trim()
         .to_string();
 
@@ -172,6 +191,23 @@ fn extract_repo_name() -> Option<String> {
 }
 
 
+/// Calculate estimated animation duration for a chunk based on line count
+/// Based on animation.rs constants:
+/// - Base typing: 30ms per char, ~50 chars/line = 1.5s per line
+/// - Line insertions: 6.7x multiplier = ~200ms per line
+/// - Line deletions: 10.0x multiplier = ~300ms per line
+/// - Cursor movements: ~0.5s per movement
+/// - Hunk pauses: 1.5s between hunks
+fn estimate_animation_duration(line_count: usize) -> f32 {
+    // Conservative estimate: assume most lines are typed (1.5s) with some insertions (0.2s)
+    let typing_time = (line_count as f32) * 1.5;  // Base typing
+    let insertion_time = (line_count as f32) * 0.2;  // Line insertion pauses
+    let cursor_time = ((line_count / 5) as f32) * 0.5;  // Cursor movements (~1 per 5 lines)
+    let hunk_time = ((line_count / 15) as f32) * 1.5;  // Hunk pauses (~1 per 15 lines)
+
+    typing_time + insertion_time + cursor_time + hunk_time
+}
+
 /// Represents a single voiceover chunk for a portion of a diff
 #[derive(Debug, Clone)]
 pub struct DiffChunk {
@@ -181,7 +217,8 @@ pub struct DiffChunk {
     pub end_line: usize,
     pub explanation: String,
     pub audio_data: Option<Vec<u8>>,
-    pub estimated_duration_secs: f32,
+    pub estimated_duration_secs: f32,  // Animation duration (used for sync)
+    pub audio_duration_secs: f32,      // Actual audio duration
 }
 
 /// Represents a single voiceover segment with audio data
@@ -210,10 +247,15 @@ pub struct AudioPlayer {
     segment_queue: Arc<Mutex<VecDeque<VoiceoverSegment>>>,
     /// Diff chunks with pre-generated audio (chunk_id -> chunk)
     chunks: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
+    /// Channel to signal when audio chunks finish
+    chunk_finished_tx: Sender<usize>,
+    chunk_finished_rx: Arc<Mutex<Receiver<usize>>>,
 }
 
 impl AudioPlayer {
     pub fn new(config: VoiceoverConfig) -> Result<Self> {
+        let (chunk_finished_tx, chunk_finished_rx) = channel();
+
         if !config.enabled {
             return Ok(Self {
                 config,
@@ -221,6 +263,8 @@ impl AudioPlayer {
                 sink: None,
                 segment_queue: Arc::new(Mutex::new(VecDeque::new())),
                 chunks: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                chunk_finished_tx,
+                chunk_finished_rx: Arc::new(Mutex::new(chunk_finished_rx)),
             });
         }
 
@@ -238,7 +282,20 @@ impl AudioPlayer {
             sink: Some(Arc::new(Mutex::new(sink))),
             segment_queue: Arc::new(Mutex::new(VecDeque::new())),
             chunks: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            chunk_finished_tx,
+            chunk_finished_rx: Arc::new(Mutex::new(chunk_finished_rx)),
         })
+    }
+
+    /// Check if any audio chunks have finished (non-blocking)
+    pub fn poll_finished_chunks(&self) -> Vec<usize> {
+        let mut finished = Vec::new();
+        if let Ok(rx) = self.chunk_finished_rx.lock() {
+            while let Ok(chunk_id) = rx.try_recv() {
+                finished.push(chunk_id);
+            }
+        }
+        finished
     }
 
     /// Get chunks for a specific file
@@ -263,6 +320,7 @@ impl AudioPlayer {
 
         let chunks = self.chunks.clone();
         let sink = self.sink.clone();
+        let finished_tx = self.chunk_finished_tx.clone();
 
         thread::spawn(move || {
             let chunk = {
@@ -281,10 +339,15 @@ impl AudioPlayer {
                             if let Ok(source) = Decoder::new(cursor) {
                                 sink_guard.append(source);
                                 sink_guard.play();
-                                eprintln!("[AUDIO] Chunk {} playing (~{:.1}s)", chunk_id, chunk.estimated_duration_secs);
+                                eprintln!("[AUDIO] Chunk {} playing (~{:.1}s audio)", chunk_id, chunk.audio_duration_secs);
 
-                                // TODO: Signal animation engine when audio finishes
-                                // For now, we'll rely on the estimated duration
+                                // Wait for audio to finish based on actual audio duration
+                                let duration_ms = (chunk.audio_duration_secs * 1000.0) as u64;
+                                thread::sleep(std::time::Duration::from_millis(duration_ms));
+
+                                // Signal that this chunk finished
+                                eprintln!("[AUDIO] Chunk {} finished", chunk_id);
+                                let _ = finished_tx.send(chunk_id);
                             }
                         }
                     }
@@ -293,7 +356,9 @@ impl AudioPlayer {
         });
     }
 
-    /// Split a file's diff into explainable chunks using LLM
+    /// Split a file's diff into explainable chunks using TWO-PHASE LLM approach
+    /// Phase 1: Get line ranges only
+    /// Phase 2: Generate explanations with word counts matching animation duration
     async fn split_diff_into_chunks(
         config: &VoiceoverConfig,
         project_context: &ProjectContext,
@@ -302,32 +367,29 @@ impl AudioPlayer {
         diff: &str,
     ) -> Result<Vec<DiffChunk>> {
         let api_key = config
-            .gemini_api_key
+            .openai_api_key
             .as_ref()
-            .context("Gemini API key not configured")?;
+            .context("OpenAI API key not configured")?;
 
-        let prompt = format!(
-            "You are analyzing a code diff for teaching purposes. Split this diff into logical, explainable chunks.\n\n\
+        // PHASE 1: Get logical chunk boundaries (line ranges only)
+        let boundaries_prompt = format!(
+            "You are analyzing a code diff. Split it into 2-5 logical chunks based on semantic changes.\n\n\
             PROJECT: {} - {}\n\
             COMMIT: \"{}\"\n\
             FILE: {}\n\n\
             DIFF:\n{}\n\n\
             INSTRUCTIONS:\n\
-            Break this diff into 2-5 logical chunks where each chunk represents a cohesive change that can be \
-            explained independently. For example:\n\
-            - Chunk 1: Lines 10-25 (adding imports and setup)\n\
-            - Chunk 2: Lines 30-60 (implementing main function)\n\
-            - Chunk 3: Lines 65-80 (adding error handling)\n\n\
-            For EACH chunk, provide:\n\
-            1. start_line: The starting line number\n\
-            2. end_line: The ending line number\n\
-            3. explanation: A 40-60 word explanation of what this chunk does and why (conversational teaching style)\n\n\
-            Return ONLY valid JSON array in this exact format:\n\
-            [\n\
-              {{\"start_line\": 10, \"end_line\": 25, \"explanation\": \"We're adding the imports needed...\"}},\n\
-              {{\"start_line\": 30, \"end_line\": 60, \"explanation\": \"Now we're implementing...\"}}\n\
-            ]\n\n\
-            Return ONLY the JSON array, no other text.",
+            Break this diff into 2-5 logical chunks where each chunk represents a cohesive change.\n\
+            Return ONLY the line ranges - no explanations yet.\n\n\
+            Respond with JSON:\n\
+            {{\n\
+              \"chunks\": [\n\
+                {{\n\
+                  \"start_line\": 1,\n\
+                  \"end_line\": 10\n\
+                }}\n\
+              ]\n\
+            }}",
             project_context.repo_name,
             project_context.description,
             commit_message,
@@ -335,58 +397,133 @@ impl AudioPlayer {
             diff.lines().take(200).collect::<Vec<_>>().join("\n")
         );
 
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key={}",
-            api_key
-        );
+        let openai_config = OpenAIConfig::new().with_api_key(api_key);
+        let client = Client::with_config(openai_config);
 
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&serde_json::json!({
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }],
-                "generationConfig": {
-                    "temperature": 0.3,
-                    "maxOutputTokens": 1024
-                }
-            }))
-            .send()
+        // Phase 1: Get chunk boundaries
+        eprintln!("[AUDIO] Phase 1: Getting chunk boundaries for {}", filename);
+        let boundaries_request = CreateChatCompletionRequestArgs::default()
+            .model("gpt-5.2")
+            .messages(vec![
+                ChatCompletionRequestMessage::User(
+                    ChatCompletionRequestUserMessageArgs::default()
+                        .content(boundaries_prompt)
+                        .build()?
+                )
+            ])
+            .temperature(0.3)
+            .max_completion_tokens(1024u32)
+            .build()?;
+
+        let boundaries_response = client
+            .chat()
+            .create(boundaries_request)
             .await
-            .context("Failed to send request to Gemini API")?;
+            .context("Failed to get chunk boundaries from OpenAI")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Gemini API error ({}): {}", status, error_text);
-        }
+        let boundaries_content = boundaries_response
+            .choices
+            .first()
+            .and_then(|choice| choice.message.content.as_ref())
+            .context("No content in boundaries response")?;
 
-        let response_json: serde_json::Value = response
-            .json()
-            .await
-            .context("Failed to parse Gemini response")?;
+        let boundaries_parsed: serde_json::Value = serde_json::from_str(boundaries_content)
+            .context("Failed to parse boundaries JSON")?;
 
-        let json_text = response_json["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .context("Failed to extract text from Gemini response")?
-            .trim();
+        let boundaries_array = boundaries_parsed["chunks"]
+            .as_array()
+            .context("No chunks array in boundaries response")?;
 
-        // Parse the JSON array
-        let chunk_data: Vec<serde_json::Value> = serde_json::from_str(json_text)
-            .context("Failed to parse chunks JSON from LLM")?;
-
+        // Phase 2: For each chunk, calculate animation duration and generate explanation
         let mut chunks = Vec::new();
-        for (idx, chunk) in chunk_data.iter().enumerate() {
+        for (idx, boundary) in boundaries_array.iter().enumerate() {
+            let start_line = boundary["start_line"].as_u64().unwrap_or(0) as usize;
+            let end_line = boundary["end_line"].as_u64().unwrap_or(0) as usize;
+            let line_count = end_line.saturating_sub(start_line);
+
+            // Calculate animation duration for this chunk
+            let animation_duration = estimate_animation_duration(line_count);
+
+            // Calculate target words: duration (seconds) × 2.5 words/sec (Inworld TTS)
+            let target_words = (animation_duration * 2.5) as usize;
+            let target_words = target_words.max(50).min(300); // Clamp to reasonable range
+
+            eprintln!("[AUDIO] Chunk {}: {} lines = {:.1}s animation = {} target words",
+                idx, line_count, animation_duration, target_words);
+
+            // Extract diff content for this chunk
+            let chunk_diff: String = diff.lines()
+                .skip(start_line.saturating_sub(1))
+                .take(line_count + 1)
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            // Generate explanation with exact word count
+            let explanation_prompt = format!(
+                "You are narrating live code changes for teaching.\n\n\
+                PROJECT: {} - {}\n\
+                COMMIT: \"{}\"\n\
+                FILE: {} (lines {}-{})\n\n\
+                CODE CHANGES:\n{}\n\n\
+                Generate a {} word explanation in conversational teaching style.\n\
+                OPTIMIZE FOR TEXT-TO-SPEECH:\n\
+                - Say 'Node' not 'Node.js', 'React' not 'React.js', 'TypeScript' not 'TS'\n\
+                - Avoid symbols, file extensions\n\
+                - Write how developers speak\n\n\
+                Explain WHAT changed, WHY it matters for this project, and HOW it works.\n\
+                Respond with ONLY the explanation text, no JSON.",
+                project_context.repo_name,
+                project_context.description,
+                commit_message,
+                filename,
+                start_line,
+                end_line,
+                chunk_diff,
+                target_words
+            );
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await; // Rate limit
+
+            let explanation_request = CreateChatCompletionRequestArgs::default()
+                .model("gpt-5.2")
+                .messages(vec![
+                    ChatCompletionRequestMessage::User(
+                        ChatCompletionRequestUserMessageArgs::default()
+                            .content(explanation_prompt)
+                            .build()?
+                    )
+                ])
+                .temperature(0.7)
+                .max_completion_tokens(target_words.saturating_mul(2) as u32) // 2x for safety
+                .build()?;
+
+            let explanation_response = client
+                .chat()
+                .create(explanation_request)
+                .await
+                .context("Failed to generate explanation from OpenAI")?;
+
+            let explanation = explanation_response
+                .choices
+                .first()
+                .and_then(|choice| choice.message.content.as_ref())
+                .context("No content in explanation response")?
+                .trim()
+                .to_string();
+
+            // Calculate actual audio duration from word count
+            let actual_word_count = explanation.split_whitespace().count();
+            let audio_duration = (actual_word_count as f32) / 2.5; // 150 WPM
+
             chunks.push(DiffChunk {
                 chunk_id: idx,
                 file_path: filename.to_string(),
-                start_line: chunk["start_line"].as_u64().unwrap_or(0) as usize,
-                end_line: chunk["end_line"].as_u64().unwrap_or(0) as usize,
-                explanation: chunk["explanation"].as_str().unwrap_or("").to_string(),
+                start_line,
+                end_line,
+                explanation,
                 audio_data: None,
-                estimated_duration_secs: 0.0,
+                estimated_duration_secs: animation_duration,  // For animation sync
+                audio_duration_secs: audio_duration,          // For audio playback
             });
         }
 
@@ -427,7 +564,7 @@ impl AudioPlayer {
                 let mut project_context = extract_project_context();
 
                 // Generate description with LLM (REQUIRED - no fallbacks)
-                if config.use_llm_explanations && config.gemini_api_key.is_some() {
+                if config.use_llm_explanations && config.openai_api_key.is_some() {
                     eprintln!("[AUDIO] Generating AI-powered project description...");
                     match generate_project_context_with_llm(&config).await {
                         Ok(llm_description) => {
@@ -477,14 +614,16 @@ impl AudioPlayer {
                         Ok(mut file_chunks) => {
                             eprintln!("[AUDIO] Split {} into {} chunks", filename, file_chunks.len());
 
-                            // Generate audio for each chunk
+                            // Generate audio for each chunk (explanations already generated with target word counts)
                             for chunk in &mut file_chunks {
                                 // Assign global chunk ID
                                 chunk.chunk_id = global_chunk_id;
                                 global_chunk_id += 1;
 
-                                eprintln!("[AUDIO] Generating audio for chunk {} (lines {}-{}): {}",
-                                    chunk.chunk_id, chunk.start_line, chunk.end_line,
+                                let word_count = chunk.explanation.split_whitespace().count();
+                                let line_count = chunk.end_line.saturating_sub(chunk.start_line);
+                                eprintln!("[AUDIO] Chunk {} ({} lines, {} words, target {:.1}s animation): {}",
+                                    chunk.chunk_id, line_count, word_count, chunk.estimated_duration_secs,
                                     &chunk.explanation[..50.min(chunk.explanation.len())]);
 
                                 // Add delay before TTS call
@@ -492,12 +631,14 @@ impl AudioPlayer {
 
                                 match Self::synthesize_speech_from_text(&config, &chunk.explanation).await {
                                     Ok(audio_data) => {
-                                        let duration = estimate_audio_duration(&chunk.explanation);
-                                        eprintln!("[AUDIO] Generated audio for chunk {} ({} bytes, ~{:.1}s)",
-                                            chunk.chunk_id, audio_data.len(), duration);
+                                        // Use word-based audio duration calculation
+                                        let audio_duration = (word_count as f32) / 2.5; // 150 WPM = 2.5 words/sec
+                                        eprintln!("[AUDIO] Generated audio: {:.1}s audio vs {:.1}s animation (ratio: {:.2})",
+                                            audio_duration, chunk.estimated_duration_secs,
+                                            audio_duration / chunk.estimated_duration_secs);
 
                                         chunk.audio_data = Some(audio_data);
-                                        chunk.estimated_duration_secs = duration;
+                                        // Keep the animation duration estimate - audio will use actual word-based duration
                                     }
                                     Err(e) => {
                                         eprintln!("[AUDIO] Failed to synthesize speech for chunk {}: {}", chunk.chunk_id, e);
@@ -629,7 +770,7 @@ impl AudioPlayer {
         diff: &str,
     ) -> Result<String> {
         let api_key = config
-            .gemini_api_key
+            .openai_api_key
             .as_ref()
             .context("Gemini API key not configured")?;
 
