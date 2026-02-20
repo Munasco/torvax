@@ -1009,6 +1009,24 @@ impl AudioPlayer {
         Ok(audio_data)
     }
 
+    /// Pause audio playback (sink keeps its queue, resumes from same position)
+    pub fn pause(&self) {
+        if let Some(sink_arc) = &self.sink {
+            if let Ok(sink) = sink_arc.lock() {
+                sink.pause();
+            }
+        }
+    }
+
+    /// Resume audio playback
+    pub fn resume(&self) {
+        if let Some(sink_arc) = &self.sink {
+            if let Ok(sink) = sink_arc.lock() {
+                sink.play();
+            }
+        }
+    }
+
     /// Stop any currently playing audio
     #[allow(dead_code)]
     pub fn stop(&mut self) {

@@ -375,6 +375,9 @@ impl AnimationEngine {
     /// Pause the animation playback.
     pub fn pause(&mut self) {
         self.paused = true;
+        if let Some(audio_player) = &self.audio_player {
+            audio_player.pause();
+        }
     }
 
     /// Resume animation playback from the current position.
@@ -384,6 +387,9 @@ impl AnimationEngine {
             let now = Instant::now();
             self.last_update = now;
             self.last_frame = now;
+            if let Some(audio_player) = &self.audio_player {
+                audio_player.resume();
+            }
         }
     }
 
