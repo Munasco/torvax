@@ -1,4 +1,5 @@
 mod animation;
+mod audio;
 mod config;
 mod git;
 mod panes;
@@ -9,10 +10,12 @@ mod widgets;
 
 use animation::SpeedRule;
 use anyhow::{Context, Result};
+use audio::{AudioPlayer, VoiceoverProvider};
 use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use git::{DiffMode, GitRepository};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use theme::Theme;
 use ui::UI;
 
@@ -27,10 +30,10 @@ pub enum PlaybackOrder {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "gitlogue",
+    name = "torvax",
     version,
-    about = "A Git history screensaver - watch your code rewrite itself",
-    long_about = "gitlogue is a terminal-based screensaver that replays Git commits as if a ghost developer were typing each change by hand. Characters appear, vanish, and transform with natural pacing and syntax highlighting."
+    about = "Git review of your diffs, like a movie",
+    long_about = "torvax replays your git history as a narrated code walkthrough — AI explains what changed and why while the code types itself on screen."
 )]
 pub struct Args {
     #[arg(
@@ -145,6 +148,29 @@ pub struct Args {
     )]
     pub speed_rule: Vec<String>,
 
+    #[arg(
+        long = "voiceover",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_name = "BOOL",
+        help = "Enable voiceover narration (uses Inworld by default, set --elevenlabs for ElevenLabs)\nRequires: INWORLD_API_KEY env var or api_key in config\nAlso requires: OPENAI_API_KEY env var for GPT-5.2 powered explanations"
+    )]
+    pub voiceover: Option<bool>,
+
+    #[arg(
+        long = "elevenlabs",
+        conflicts_with = "voiceover_provider",
+        help = "Use ElevenLabs TTS instead of Inworld (requires ELEVENLABS_API_KEY env var)"
+    )]
+    pub elevenlabs: bool,
+
+    #[arg(
+        long = "voiceover-provider",
+        value_name = "PROVIDER",
+        help = "Voiceover provider to use: elevenlabs or inworld (overrides config file)"
+    )]
+    pub voiceover_provider: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -242,6 +268,126 @@ impl Args {
     }
 }
 
+/// Interactively prompt for an API key, save it to config, and return it.
+fn prompt_for_key(label: &str, help_url: &str, config_field: &str) -> Option<String> {
+    use std::io::Write;
+    println!();
+    println!("torvax needs your {} to enable voiceover.", label);
+    println!("  Get yours at: {}", help_url);
+    print!("  Paste key (or press Enter to skip): ");
+    std::io::stdout().flush().ok();
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return None;
+    }
+
+    let key = input.trim().to_string();
+    if key.is_empty() {
+        println!("  Skipping voiceover.");
+        return None;
+    }
+
+    match config::Config::save_voiceover_key(config_field, &key) {
+        Ok(()) => println!("  Saved to ~/.config/torvax/config.toml"),
+        Err(e) => println!("  Warning: could not save key to config: {}", e),
+    }
+
+    Some(key)
+}
+
+/// Create audio player from config and CLI arguments
+fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<AudioPlayer>>> {
+    let mut voiceover_config = config.voiceover.clone();
+    
+    // Override with CLI arguments
+    if let Some(enabled) = args.voiceover {
+        voiceover_config.enabled = enabled;
+    }
+
+    // Handle --elevenlabs flag
+    if args.elevenlabs {
+        voiceover_config.provider = VoiceoverProvider::ElevenLabs;
+        voiceover_config.enabled = true; // Auto-enable when --elevenlabs is used
+    }
+
+    if let Some(ref provider_str) = args.voiceover_provider {
+        voiceover_config.provider = match provider_str.to_lowercase().as_str() {
+            "elevenlabs" => VoiceoverProvider::ElevenLabs,
+            "inworld" => VoiceoverProvider::Inworld,
+            _ => {
+                eprintln!("Warning: Unknown voiceover provider '{}', using default (inworld)", provider_str);
+                voiceover_config.provider
+            }
+        };
+    }
+    
+    // Try to get API key from environment if not in config
+    if voiceover_config.enabled && voiceover_config.api_key.is_none() {
+        match voiceover_config.provider {
+            VoiceoverProvider::ElevenLabs => {
+                if let Ok(key) = std::env::var("ELEVENLABS_API_KEY") {
+                    voiceover_config.api_key = Some(key);
+                }
+            }
+            VoiceoverProvider::Inworld => {
+                if let Ok(key) = std::env::var("INWORLD_API_KEY") {
+                    voiceover_config.api_key = Some(key);
+                }
+            }
+        }
+    }
+    
+    // Try to get OpenAI API key from environment if not in config
+    if voiceover_config.openai_api_key.is_none() {
+        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
+            voiceover_config.openai_api_key = Some(key);
+        }
+    }
+    
+    if voiceover_config.enabled {
+        if voiceover_config.openai_api_key.is_none() {
+            voiceover_config.openai_api_key = prompt_for_key(
+                "OpenAI API key (for GPT-5.2 explanations)",
+                "https://platform.openai.com/api-keys",
+                "openai_api_key",
+            );
+            if voiceover_config.openai_api_key.is_none() {
+                return Ok(None);
+            }
+        }
+
+        if voiceover_config.api_key.is_none() {
+            voiceover_config.api_key = prompt_for_key(
+                "Inworld API key (for text-to-speech)",
+                "https://inworld.ai  →  API  →  Basic Auth key",
+                "api_key",
+            );
+            if voiceover_config.api_key.is_none() {
+                return Ok(None);
+            }
+        }
+
+        // Always enable LLM explanations when an OpenAI key is present —
+        // this is what actually generates narration text and triggers audio.
+        // Also persist enabled + use_llm_explanations so future runs work
+        // without re-prompting.
+        voiceover_config.use_llm_explanations = true;
+        let _ = config::Config::enable_voiceover();
+        let _ = config::Config::save_voiceover_key("use_llm_explanations", "true");
+
+        match AudioPlayer::new(voiceover_config) {
+            Ok(player) => Ok(Some(Arc::new(player))),
+            Err(e) => {
+                eprintln!("\ntorvax: Failed to initialize audio: {}", e);
+                Ok(None)
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -328,6 +474,9 @@ fn main() -> Result<()> {
                     })
                     .collect();
 
+                // Create audio player
+                let audio_player = create_audio_player(&config, &args)?;
+
                 // Create UI - pass repo ref only if looping (to refresh diff)
                 let repo_ref = if loop_playback { Some(&repo) } else { None };
                 let mut ui = UI::new(
@@ -339,6 +488,7 @@ fn main() -> Result<()> {
                     None,
                     false,
                     speed_rules,
+                    audio_player,
                 );
                 ui.set_diff_mode(Some(mode));
                 ui.load_commit(metadata);
@@ -449,6 +599,9 @@ fn main() -> Result<()> {
         })
         .collect();
 
+    // Create audio player
+    let audio_player = create_audio_player(&config, &args)?;
+
     // Create UI with repository reference
     // Filtered modes (range/author/date) always need repo ref for iteration
     let repo_ref = if is_range_mode || is_filtered {
@@ -467,6 +620,7 @@ fn main() -> Result<()> {
         args.commit.clone(),
         is_range_mode,
         speed_rules,
+        audio_player,
     );
     ui.load_commit(metadata);
     ui.run()?;

@@ -298,6 +298,26 @@ impl CommitMetadata {
         });
         indices
     }
+
+    /// Calculate total insertions and deletions across all changes
+    pub fn calculate_stats(&self) -> (usize, usize) {
+        let mut insertions = 0;
+        let mut deletions = 0;
+        
+        for change in &self.changes {
+            for hunk in &change.hunks {
+                for line_change in &hunk.lines {
+                    match line_change.change_type {
+                        LineChangeType::Addition => insertions += 1,
+                        LineChangeType::Deletion => deletions += 1,
+                        LineChangeType::Context => {},
+                    }
+                }
+            }
+        }
+        
+        (insertions, deletions)
+    }
 }
 
 impl GitRepository {
@@ -315,9 +335,10 @@ impl GitRepository {
     }
 
     pub fn get_commit(&self, hash: &str) -> Result<CommitMetadata> {
+        let hash = Self::normalize_ref(hash);
         let obj = self
             .repo
-            .revparse_single(hash)
+            .revparse_single(&hash)
             .context("Invalid commit hash or commit not found")?;
 
         let commit = obj.peel_to_commit().context("Object is not a commit")?;
@@ -511,7 +532,32 @@ impl GitRepository {
         Ok(commits)
     }
 
+    /// Normalize shorthand commit refs before passing to libgit2.
+    /// Converts `HEAD@N` → `HEAD~N` (e.g. `HEAD@3..HEAD` → `HEAD~3..HEAD`).
+    fn normalize_ref(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '@' {
+                let mut digits = String::new();
+                while chars.peek().map(|d| d.is_ascii_digit()).unwrap_or(false) {
+                    digits.push(chars.next().unwrap());
+                }
+                if !digits.is_empty() {
+                    result.push('~');
+                    result.push_str(&digits);
+                } else {
+                    result.push('@');
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
     fn parse_commit_range(&self, range: &str) -> Result<Vec<Oid>> {
+        let range = &Self::normalize_ref(range);
         // Reject symmetric difference operator (not supported)
         if range.contains("...") {
             anyhow::bail!(
@@ -1240,7 +1286,7 @@ mod tests {
                     .as_nanos(),
                 COUNTER.fetch_add(1, Ordering::SeqCst)
             );
-            let path = std::env::temp_dir().join(format!("gitlogue_test_{}", unique_id));
+            let path = std::env::temp_dir().join(format!("torvax_test_{}", unique_id));
             if path.exists() {
                 std::fs::remove_dir_all(&path).unwrap();
             }

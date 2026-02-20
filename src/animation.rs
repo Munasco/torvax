@@ -183,6 +183,12 @@ pub enum AnimationStep {
     Pause {
         multiplier: f64,
     },
+    StartAudio {
+        chunk_id: usize,  // Start playing this audio chunk (non-blocking)
+    },
+    WaitForAudio {
+        chunk_id: usize,  // Wait for this audio chunk to finish (blocking)
+    },
     SwitchFile {
         file_index: usize,
         old_content: String,
@@ -307,6 +313,14 @@ pub struct AnimationEngine {
     paused: bool,
     line_checkpoints: VecDeque<ManualCheckpoint>,
     change_checkpoints: VecDeque<ManualCheckpoint>,
+    /// Audio player for synced voiceovers
+    audio_player: Option<std::sync::Arc<crate::audio::AudioPlayer>>,
+    /// Currently playing audio chunk ID (for WaitForAudio steps)
+    current_audio_chunk: Option<usize>,
+    /// Flag to indicate audio chunk has finished playing
+    audio_chunk_finished: bool,
+    /// Set of chunk IDs that have already finished (to avoid waiting for already-completed audio)
+    finished_audio_chunks: std::collections::HashSet<usize>,
 }
 
 impl AnimationEngine {
@@ -346,12 +360,24 @@ impl AnimationEngine {
             paused: false,
             line_checkpoints: VecDeque::new(),
             change_checkpoints: VecDeque::new(),
+            audio_player: None,
+            current_audio_chunk: None,
+            audio_chunk_finished: false,
+            finished_audio_chunks: std::collections::HashSet::new(),
         }
+    }
+
+    /// Set the audio player for synced voiceovers
+    pub fn set_audio_player(&mut self, player: std::sync::Arc<crate::audio::AudioPlayer>) {
+        self.audio_player = Some(player);
     }
 
     /// Pause the animation playback.
     pub fn pause(&mut self) {
         self.paused = true;
+        if let Some(audio_player) = &self.audio_player {
+            audio_player.pause();
+        }
     }
 
     /// Resume animation playback from the current position.
@@ -361,6 +387,9 @@ impl AnimationEngine {
             let now = Instant::now();
             self.last_update = now;
             self.last_frame = now;
+            if let Some(audio_player) = &self.audio_player {
+                audio_player.resume();
+            }
         }
     }
 
@@ -597,6 +626,9 @@ impl AnimationEngine {
         self.state = AnimationState::Playing;
         self.last_update = Instant::now();
         self.pause_until = None;
+        self.finished_audio_chunks.clear();
+        self.current_audio_chunk = None;
+        self.audio_chunk_finished = false;
 
         // Check if this is a working tree diff (not a real commit)
         let is_working_tree = metadata.hash == "working-tree";
@@ -880,8 +912,43 @@ impl AnimationEngine {
             .map(|c| c.lines().collect())
             .unwrap_or_default();
 
+        // Get audio chunks for this file (only those with audio)
+        let audio_chunks = if let Some(audio_player) = &self.audio_player {
+            audio_player.get_chunks_for_file(&change.path)
+                .into_iter()
+                .filter(|c| c.has_audio)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        let mut current_chunk_id: Option<usize> = None;
+
         // Process each hunk
-        for hunk in &change.hunks {
+        for (hunk_idx, hunk) in change.hunks.iter().enumerate() {
+            // Match hunk to audio chunk by hunk index
+            let matching_chunk = audio_chunks.iter().find(|chunk| {
+                chunk.hunk_indices.contains(&hunk_idx)
+            });
+
+            // If we've entered a new chunk, start its audio
+            if let Some(chunk) = matching_chunk {
+                if current_chunk_id != Some(chunk.chunk_id) {
+                    // If we were in a previous chunk, wait for it to finish first
+                    if let Some(prev_chunk_id) = current_chunk_id {
+                        self.steps.push(AnimationStep::WaitForAudio {
+                            chunk_id: prev_chunk_id,
+                        });
+                    }
+
+                    // Start the new chunk's audio
+                    self.steps.push(AnimationStep::StartAudio {
+                        chunk_id: chunk.chunk_id,
+                    });
+                    current_chunk_id = Some(chunk.chunk_id);
+                }
+            }
+
             // Calculate target line in current buffer
             // hunk.old_start is 1-indexed (Git line numbers start at 1)
             // We need to convert to 0-indexed and adjust by how many lines we've added/removed
@@ -920,6 +987,13 @@ impl AnimationEngine {
             // Add pause between hunks
             self.steps.push(AnimationStep::Pause {
                 multiplier: HUNK_PAUSE,
+            });
+        }
+
+        // If we finished with a chunk still active, wait for it to complete
+        if let Some(final_chunk_id) = current_chunk_id {
+            self.steps.push(AnimationStep::WaitForAudio {
+                chunk_id: final_chunk_id,
             });
         }
     }
@@ -1136,6 +1210,18 @@ impl AnimationEngine {
     }
 
     fn execute_batch_steps(&mut self, frame_start: Instant) -> bool {
+        // Poll for finished audio chunks
+        if let Some(audio_player) = &self.audio_player {
+            for finished_chunk_id in audio_player.poll_finished_chunks() {
+                // Track this chunk as finished
+                self.finished_audio_chunks.insert(finished_chunk_id);
+
+                if self.current_audio_chunk == Some(finished_chunk_id) {
+                    self.audio_chunk_finished();
+                }
+            }
+        }
+
         let mut accumulated_delay = 0u64;
         let mut executed_any = false;
 
@@ -1162,6 +1248,11 @@ impl AnimationEngine {
     }
 
     fn can_execute_step(&self, executed_any: bool, accumulated_delay: u64) -> bool {
+        // If waiting for audio, don't proceed until audio finishes
+        if self.current_audio_chunk.is_some() && !self.audio_chunk_finished {
+            return false;
+        }
+
         // First step: check if enough time has elapsed since last step
         if !executed_any {
             return self.last_update.elapsed() >= Duration::from_millis(self.next_step_delay);
@@ -1169,6 +1260,12 @@ impl AnimationEngine {
 
         // Subsequent steps: check if they fit within frame budget
         accumulated_delay + self.next_step_delay <= self.frame_interval_ms
+    }
+
+    /// Signal that the current audio chunk has finished playing
+    pub fn audio_chunk_finished(&mut self) {
+        self.audio_chunk_finished = true;
+        self.current_audio_chunk = None;
     }
 
     fn execute_step(&mut self, step: AnimationStep) {
@@ -1237,6 +1334,29 @@ impl AnimationEngine {
                 let duration_ms = (self.speed_ms as f64 * multiplier) as u64;
                 self.pause_until = Some(Instant::now() + Duration::from_millis(duration_ms));
             }
+            AnimationStep::StartAudio { chunk_id } => {
+                // Start playing this audio chunk (non-blocking - animation continues)
+                if let Some(audio_player) = &self.audio_player {
+                    audio_player.trigger_chunk(chunk_id);
+                }
+                // Don't set current_audio_chunk yet - we're not waiting
+                self.next_step_delay = 0; // No delay, continue immediately
+            }
+            AnimationStep::WaitForAudio { chunk_id } => {
+                // Check if this chunk already finished (audio was faster than animation)
+                if self.finished_audio_chunks.contains(&chunk_id) {
+                    self.next_step_delay = 0;
+                    return; // Don't wait, continue immediately
+                }
+
+                // Wait for this audio chunk to finish (blocking)
+                self.current_audio_chunk = Some(chunk_id);
+                self.audio_chunk_finished = false;
+
+                // Pause animation until audio finishes
+                // We'll check audio_chunk_finished in tick()
+                self.next_step_delay = 0; // Don't add delay, we're waiting for audio
+            }
             AnimationStep::OpenFileDialogStart => {
                 self.dialog_typing_text = String::new();
                 self.dialog_title = Some("Open File...".to_string());
@@ -1258,6 +1378,11 @@ impl AnimationEngine {
                 self.current_file_index = file_index;
                 self.current_file_path = Some(path.clone());
                 self.buffer = EditorBuffer::from_content(&old_content);
+
+                // Trigger voiceover for file open
+                if let Some(audio_player) = &self.audio_player {
+                    audio_player.trigger_voiceover(crate::audio::VoiceoverTrigger::FileOpen(path.clone()));
+                }
 
                 // Update typing speed based on file-specific rules
                 self.speed_ms = self.get_speed_for_file(&path);

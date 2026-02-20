@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-REPO="unhappychoice/gitlogue"
-BINARY_NAME="gitlogue"
+REPO="Munasco/torvax"
+BINARY_NAME="torvax"
 
 get_latest_release() {
     curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
@@ -24,7 +24,7 @@ check_glibc_version() {
             echo ""
             echo "Options:"
             echo "  1. Upgrade your OS to get a newer glibc"
-            echo "  2. Build from source: cargo install gitlogue"
+            echo "  2. Build from source: cargo install torvax"
             echo "  3. Continue anyway and see if it works"
             echo ""
             read -p "Continue with installation? [y/N] " -n 1 -r

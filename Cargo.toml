@@ -1,11 +1,11 @@
 [package]
-name = "gitlogue"
-version = "0.8.0"
+name = "torvax"
+version = "0.1.0"
 edition = "2021"
-authors = ["unhappychoice"]
-description = "A Git history screensaver - watch your code rewrite itself"
+authors = ["Munasco"]
+description = "Git review of your diffs, like a movie"
 license = "ISC"
-repository = "https://github.com/unhappychoice/gitlogue"
+repository = "https://github.com/Munasco/torvax"
 
 exclude = [
     "*.png",
@@ -70,13 +70,19 @@ tree-sitter-xml = "0.7"
 tree-sitter-yaml = "0.7"
 tree-sitter-zig = "1.0"
 unicode-width = "0.2"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+serde_json = "1.0"
+rodio = "0.19"
+base64 = "0.22"
+tokio = { version = "1.42", features = ["rt", "rt-multi-thread"] }
+async-openai = "0.28"
 
 [lib]
-name = "gitlogue"
+name = "torvax"
 path = "src/lib.rs"
 
 [[bin]]
-name = "gitlogue"
+name = "torvax"
 path = "src/main.rs"
 
 

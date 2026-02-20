@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use crate::audio::VoiceoverConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -19,6 +20,8 @@ pub struct Config {
     pub ignore_patterns: Vec<String>,
     #[serde(default)]
     pub speed_rules: Vec<String>,
+    #[serde(default)]
+    pub voiceover: VoiceoverConfig,
 }
 
 fn default_theme() -> String {
@@ -55,6 +58,7 @@ impl Default for Config {
             loop_playback: default_loop(),
             ignore_patterns: default_ignore_patterns(),
             speed_rules: Vec::new(),
+            voiceover: VoiceoverConfig::default(),
         }
     }
 }
@@ -135,7 +139,7 @@ impl Config {
             };
 
             format!(
-                "# gitlogue configuration file\n\
+                "# torvax configuration file\n\
                  # All settings are optional and will use defaults if not specified\n\
                  \n\
                  # Theme to use for syntax highlighting\n\
@@ -159,14 +163,30 @@ impl Config {
                  \n\
                  # Speed rules for different file types (pattern:milliseconds)\n\
                  # Examples: [\"*.java:50\", \"*.xml:5\", \"*.rs:30\"]\n\
-                 speed_rules = {}\n",
+                 speed_rules = {}\n\
+                 \n\
+                 # Voiceover settings for narrating git changes\n\
+                 [voiceover]\n\
+                 enabled = {}\n\
+                 provider = \"{}\"  # Options: \"inworld\" (default) or \"elevenlabs\"\n\
+                 use_llm_explanations = {}  # Use OpenAI GPT-5.2 to generate detailed teaching explanations\n\
+                 # api_key = \"your-base64-api-key\"  # TTS provider API key (or use INWORLD_API_KEY/ELEVENLABS_API_KEY env var)\n\
+                 # openai_api_key = \"your-openai-key\"  # OpenAI API key (required for LLM explanations, or use OPENAI_API_KEY env var)\n\
+                 # voice_id = \"Ashley\"  # Optional: Inworld voice ID (default: Ashley) or ElevenLabs voice ID\n\
+                 # model_id = \"inworld-tts-1.5-max\"  # Optional: Inworld model (default) or ElevenLabs model\n",
                 self.theme,
                 self.speed,
                 self.background,
                 self.order,
                 self.loop_playback,
                 patterns_str,
-                speed_rules_str
+                speed_rules_str,
+                self.voiceover.enabled,
+                match self.voiceover.provider {
+                    crate::audio::VoiceoverProvider::Inworld => "inworld",
+                    crate::audio::VoiceoverProvider::ElevenLabs => "elevenlabs",
+                },
+                self.voiceover.use_llm_explanations
             )
         };
 
@@ -178,7 +198,7 @@ impl Config {
         let config_dir = dirs::home_dir()
             .context("Failed to determine home directory")?
             .join(".config")
-            .join("gitlogue");
+            .join("torvax");
 
         fs::create_dir_all(&config_dir).with_context(|| {
             format!(
@@ -190,12 +210,58 @@ impl Config {
         Ok(config_dir.join("config.toml"))
     }
 
+    /// Write a string key into the [voiceover] table without touching the rest of the file.
+    pub fn save_voiceover_key(field: &str, value: &str) -> Result<()> {
+        let config_path = Self::config_path()?;
+
+        let content = if config_path.exists() {
+            fs::read_to_string(&config_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+
+        if doc.get("voiceover").is_none() {
+            doc["voiceover"] = toml_edit::table();
+        }
+        doc["voiceover"][field] = toml_edit::value(value);
+
+        fs::write(&config_path, doc.to_string())?;
+        Ok(())
+    }
+
+    /// Enable voiceover in the [voiceover] table (sets enabled = true).
+    pub fn enable_voiceover() -> Result<()> {
+        let config_path = Self::config_path()?;
+
+        let content = if config_path.exists() {
+            fs::read_to_string(&config_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        let mut doc = content
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap_or_else(|_| toml_edit::DocumentMut::new());
+
+        if doc.get("voiceover").is_none() {
+            doc["voiceover"] = toml_edit::table();
+        }
+        doc["voiceover"]["enabled"] = toml_edit::value(true);
+
+        fs::write(&config_path, doc.to_string())?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn themes_dir() -> Result<PathBuf> {
         let config_dir = dirs::home_dir()
             .context("Failed to determine home directory")?
             .join(".config")
-            .join("gitlogue")
+            .join("torvax")
             .join("themes");
 
         fs::create_dir_all(&config_dir).with_context(|| {

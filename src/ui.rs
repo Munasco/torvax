@@ -20,6 +20,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::animation::{AnimationEngine, SpeedRule, StepMode};
+use crate::audio::AudioPlayer;
 use crate::git::{CommitMetadata, DiffMode, GitRepository};
 use crate::panes::{EditorPane, FileTreePane, StatusBarPane, TerminalPane};
 use crate::theme::Theme;
@@ -41,7 +42,7 @@ enum PlaybackState {
     Paused,
 }
 
-/// Main UI controller for the gitlogue terminal interface.
+/// Main UI controller for the torvax terminal interface.
 pub struct UI<'a> {
     state: UIState,
     speed_ms: u64,
@@ -63,6 +64,7 @@ pub struct UI<'a> {
     history_index: Option<usize>,
     menu_index: usize,
     prev_state: Option<Box<UIState>>,
+    audio_player: Option<Arc<AudioPlayer>>,
 }
 
 impl<'a> UI<'a> {
@@ -77,12 +79,18 @@ impl<'a> UI<'a> {
         commit_spec: Option<String>,
         is_range_mode: bool,
         speed_rules: Vec<SpeedRule>,
+        audio_player: Option<Arc<AudioPlayer>>,
     ) -> Self {
         let should_exit = Arc::new(AtomicBool::new(false));
         Self::setup_signal_handler(should_exit.clone());
 
         let mut engine = AnimationEngine::new(speed_ms);
         engine.set_speed_rules(speed_rules);
+
+        // Pass audio player to animation engine for synced voiceovers
+        if let Some(ref player) = audio_player {
+            engine.set_audio_player(Arc::clone(player));
+        }
 
         Self {
             state: UIState::Playing,
@@ -105,6 +113,7 @@ impl<'a> UI<'a> {
             history_index: None,
             menu_index: 0,
             prev_state: None,
+            audio_player,
         }
     }
 
@@ -161,12 +170,62 @@ impl<'a> UI<'a> {
         if record_history {
             self.record_history(&metadata);
         }
+        
+        // Generate synced voiceover segments if enabled
+        if let Some(audio_player) = &self.audio_player {
+            // Build file changes with diffs and status for LLM
+            let file_changes: Vec<(String, String, crate::git::FileStatus)> = metadata.changes.iter()
+                .filter(|c| !c.is_excluded)
+                .map(|change| {
+                    let diff = Self::build_diff_text(change);
+                    (change.path.clone(), diff, change.status.clone())
+                })
+                .collect();
+
+            // Pre-generate all audio chunks (BLOCKS until complete)
+            let _chunks = audio_player.generate_audio_chunks(
+                metadata.hash.clone(),
+                metadata.author.clone(),
+                metadata.message.clone(),
+                file_changes,
+                self.speed_ms,
+            );
+
+            // Animation engine will insert WaitForAudio steps based on chunks
+        }
+        
         self.engine.load_commit(&metadata);
         match self.playback_state {
             PlaybackState::Playing => self.engine.resume(),
             PlaybackState::Paused => self.engine.pause(),
         }
         self.state = UIState::Playing;
+    }
+
+    /// Build a text representation of file diff (including @@ hunk headers for duration calculation)
+    fn build_diff_text(change: &crate::git::FileChange) -> String {
+        let mut diff = String::new();
+
+        for hunk in &change.hunks {
+            // Include hunk header so calculate_animation_duration can parse it
+            diff.push_str(&format!("@@ -{},{} +{},{} @@\n",
+                hunk.old_start, hunk.old_lines, hunk.new_start, hunk.new_lines));
+            for line in &hunk.lines {
+                match line.change_type {
+                    crate::git::LineChangeType::Addition => {
+                        diff.push_str(&format!("+{}\n", line.content));
+                    }
+                    crate::git::LineChangeType::Deletion => {
+                        diff.push_str(&format!("-{}\n", line.content));
+                    }
+                    crate::git::LineChangeType::Context => {
+                        diff.push_str(&format!(" {}\n", line.content));
+                    }
+                }
+            }
+        }
+
+        diff
     }
 
     fn record_history(&mut self, metadata: &CommitMetadata) {
@@ -684,15 +743,14 @@ impl<'a> UI<'a> {
         let version = env!("CARGO_PKG_VERSION");
         let lines = vec![
             Line::from(Span::styled(
-                "gitlogue",
+                "torvax",
                 Style::default().fg(self.theme.file_tree_current_file_fg),
             )),
             Line::from(format!("Version {version}")),
             Line::from(""),
-            Line::from("A cinematic Git commit replay tool"),
-            Line::from("for the terminal."),
+            Line::from("Git review of your diffs, like a movie."),
             Line::from(""),
-            Line::from("https://github.com/unhappychoice/gitlogue"),
+            Line::from("https://github.com/Munasco/torvax"),
         ];
 
         let block = Block::default()
