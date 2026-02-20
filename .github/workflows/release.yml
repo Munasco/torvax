@@ -139,7 +139,7 @@ jobs:
           LINUX_ARM_SHA=$(curl -sL "$LINUX_ARM_URL" | sha256sum | cut -d' ' -f1)
 
           cat > homebrew-tap/Formula/torvax.rb << EOF
-          class Gitlogue < Formula
+          class Torvax < Formula
             desc "Git review of your diffs, like a movie"
             homepage "https://github.com/$REPO"
             version "${VERSION#v}"
