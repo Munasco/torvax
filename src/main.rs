@@ -177,8 +177,6 @@ pub struct Args {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Save your API keys and enable voiceover (run this first)
-    Setup,
     /// Theme management commands
     Theme {
         #[command(subcommand)]
@@ -398,42 +396,6 @@ fn main() -> Result<()> {
     // Handle subcommands
     if let Some(ref command) = args.command {
         match command {
-            Commands::Setup => {
-                println!("torvax setup — configure API keys for voiceover narration");
-                println!();
-
-                let openai_key = prompt_for_key(
-                    "OpenAI API key (GPT-5.2 generates the narration text)",
-                    "https://platform.openai.com/api-keys",
-                    "openai_api_key",
-                );
-
-                let inworld_key = prompt_for_key(
-                    "Inworld API key (text-to-speech)",
-                    "https://inworld.ai  →  API  →  Basic Auth key",
-                    "api_key",
-                );
-
-                println!();
-                match (openai_key.is_some(), inworld_key.is_some()) {
-                    (true, true) => {
-                        let _ = config::Config::enable_voiceover();
-                        println!("All set. Run: torvax --voiceover --commit HEAD~5..HEAD");
-                    }
-                    (true, false) => {
-                        println!("OpenAI key saved. Still need your Inworld key.");
-                        println!("Run `torvax setup` again, or it will be prompted on first run.");
-                    }
-                    (false, true) => {
-                        println!("Inworld key saved. Still need your OpenAI key.");
-                        println!("Run `torvax setup` again, or it will be prompted on first run.");
-                    }
-                    (false, false) => {
-                        println!("No keys saved. Re-run `torvax setup` when you have them.");
-                    }
-                }
-                return Ok(());
-            }
             Commands::Theme { command } => match command {
                 ThemeCommands::List => {
                     println!("Available themes:");

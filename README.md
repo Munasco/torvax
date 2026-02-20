@@ -33,13 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/Munasco/torvax/main/install.sh | ba
 
 ## Setup
 
-Run the setup command — it will ask for your keys and save them:
-
-```bash
-torvax setup
-```
-
-Or add them manually to `~/.config/torvax/config.toml`:
+The first time you run `torvax --voiceover`, it will ask for your keys and save them automatically. Or add them manually to `~/.config/torvax/config.toml`:
 
 ```toml
 [voiceover]
@@ -62,9 +56,6 @@ export INWORLD_API_KEY="your-inworld-base64-key"
 ## Run
 
 ```bash
-# First time — save your API keys
-torvax setup
-
 # Narrated replay of recent commits
 torvax --voiceover --commit HEAD~3..HEAD
 
