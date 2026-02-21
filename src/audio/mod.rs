@@ -99,7 +99,7 @@ impl AudioPlayer {
                     if let Some(sink_arc) = sink {
                         // Append source and release the lock immediately so
                         // pause()/resume() on the main thread are never blocked.
-                        let duration_ms = {
+                        {
                             let Ok(guard) = sink_arc.lock() else { return };
                             let cursor = std::io::Cursor::new(audio_data);
                             let Ok(source) = Decoder::new(cursor) else {
@@ -107,10 +107,26 @@ impl AudioPlayer {
                             };
                             guard.append(source);
                             guard.play();
-                            (chunk.audio_duration_secs * 1000.0) as u64
                         }; // lock released
 
-                        thread::sleep(std::time::Duration::from_millis(duration_ms));
+                        // Poll the sink to detect when audio actually finishes.
+                        // This respects pause/resume because sink.empty() only returns
+                        // true when audio has actually finished playing, not just
+                        // when the expected duration has elapsed.
+                        loop {
+                            thread::sleep(std::time::Duration::from_millis(50));
+
+                            // Check if sink is empty (audio finished)
+                            let is_empty = sink_arc
+                                .lock()
+                                .map(|guard| guard.empty())
+                                .unwrap_or(true);
+
+                            if is_empty {
+                                break;
+                            }
+                        }
+
                         let _ = tx.send(chunk_id);
                     }
                 }
