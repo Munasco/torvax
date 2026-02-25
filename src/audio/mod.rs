@@ -8,7 +8,7 @@ pub use types::{
 };
 
 use anyhow::{Context, Result};
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStream, Sink};
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -43,8 +43,10 @@ impl AudioPlayer {
             });
         }
 
-        let (_stream, stream_handle) =
-            OutputStream::try_default().context("Failed to create audio output stream")?;
+        eprintln!("[AUDIO INIT] Creating OutputStream...");
+        let (_stream, stream_handle) = OutputStream::try_default()
+            .context("Failed to create audio output stream during AudioPlayer::new()")?;
+        eprintln!("[AUDIO INIT] OutputStream created successfully");
         let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
         sink.play();
 
@@ -88,6 +90,7 @@ impl AudioPlayer {
         if !self.config.enabled || self.sink.is_none() {
             return;
         }
+        eprintln!("[AUDIO] trigger_chunk({})", chunk_id);
         let chunks = self.chunks.clone();
         let sink = self.sink.clone();
         let tx = self.chunk_finished_tx.clone();
@@ -95,11 +98,19 @@ impl AudioPlayer {
         thread::spawn(move || {
             let chunk = chunks.lock().ok().and_then(|g| g.get(&chunk_id).cloned());
             if let Some(chunk) = chunk {
+                eprintln!(
+                    "[AUDIO] Chunk {} found, has_audio={}",
+                    chunk_id, chunk.has_audio
+                );
                 if let Some(audio_data) = chunk.audio_data {
+                    eprintln!(
+                        "[AUDIO] Chunk {} starting playback ({} bytes)",
+                        chunk_id,
+                        audio_data.len()
+                    );
                     if let Some(sink_arc) = sink {
-                        // Append source and release the lock immediately so
-                        // pause()/resume() on the main thread are never blocked.
-                        let duration_ms = {
+                        // Append source, wait for it to start, then wait for completion
+                        {
                             let Ok(guard) = sink_arc.lock() else { return };
                             let cursor = std::io::Cursor::new(audio_data);
                             let Ok(source) = Decoder::new(cursor) else {
@@ -107,13 +118,26 @@ impl AudioPlayer {
                             };
                             guard.append(source);
                             guard.play();
-                            (chunk.audio_duration_secs * 1000.0) as u64
-                        }; // lock released
+                        } // Lock released
 
-                        thread::sleep(std::time::Duration::from_millis(duration_ms));
+                        // Wait for audio to start playing (sink becomes non-empty)
+                        while sink_arc.lock().map(|guard| guard.empty()).unwrap_or(true) {
+                            thread::sleep(std::time::Duration::from_millis(10));
+                        }
+
+                        // Now wait for audio to finish (sink becomes empty again)
+                        while !sink_arc.lock().map(|guard| guard.empty()).unwrap_or(true) {
+                            thread::sleep(std::time::Duration::from_millis(50));
+                        }
+
+                        eprintln!("[AUDIO] Chunk {} finished playback", chunk_id);
                         let _ = tx.send(chunk_id);
                     }
+                } else {
+                    eprintln!("[AUDIO] Chunk {} has no audio_data", chunk_id);
                 }
+            } else {
+                eprintln!("[AUDIO] Chunk {} not found in chunks map", chunk_id);
             }
         });
     }
@@ -176,20 +200,42 @@ impl AudioPlayer {
     }
 }
 
-/// Pre-generate all audio chunks for a commit's file changes (blocking, Send-safe).
-///
-/// This is a free function instead of a method on `AudioPlayer` because
-/// `AudioPlayer` contains `OutputStream` which is `!Send`. The caller can
-/// extract the sendable parts via `voiceover_config()` and `chunks_handle()`
-/// and run this on a background thread.
-pub fn generate_audio_chunks(
+/// Pre-generate all audio chunks with progress reporting.
+pub fn generate_audio_chunks_with_progress(
     config: VoiceoverConfig,
     chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
     message: String,
     file_changes: Vec<(String, String, FileStatus)>,
     speed_ms: u64,
+    progress: Arc<Mutex<(String, f32)>>,
 ) -> Vec<DiffChunk> {
+    let _ = progress
+        .lock()
+        .map(|mut p| *p = ("Analyzing repository...".to_string(), 0.0));
+    generate_audio_chunks_impl(
+        config,
+        chunks_map,
+        message,
+        file_changes,
+        speed_ms,
+        Some(progress),
+    )
+}
+
+fn generate_audio_chunks_impl(
+    config: VoiceoverConfig,
+    chunks_map: Arc<Mutex<std::collections::HashMap<usize, DiffChunk>>>,
+    message: String,
+    file_changes: Vec<(String, String, FileStatus)>,
+    speed_ms: u64,
+    progress: Option<Arc<Mutex<(String, f32)>>>,
+) -> Vec<DiffChunk> {
+    eprintln!(
+        "[AUDIO GEN] Starting audio generation, {} file changes",
+        file_changes.len()
+    );
     if !config.enabled || config.api_key.is_none() {
+        eprintln!("[AUDIO GEN] Audio disabled or no API key, returning empty");
         return Vec::new();
     }
 
@@ -198,20 +244,48 @@ pub fn generate_audio_chunks(
         guard.clear();
     }
 
+    eprintln!("[AUDIO GEN] Creating tokio runtime...");
     let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(_) => return Vec::new(),
+        Ok(rt) => {
+            eprintln!("[AUDIO GEN] Tokio runtime created");
+            rt
+        }
+        Err(e) => {
+            eprintln!("[AUDIO GEN] Failed to create tokio runtime: {:?}", e);
+            return Vec::new();
+        }
     };
 
+    eprintln!("[AUDIO GEN] Entering async block...");
     rt.block_on(async {
+        eprintln!("[AUDIO GEN] Inside async block, starting project context generation...");
+        if let Some(ref p) = progress {
+            let _ = p
+                .lock()
+                .map(|mut s| *s = ("Generating project context with GPT...".to_string(), 0.05));
+        }
+
+        eprintln!("[AUDIO GEN] Calling extract_project_context...");
         let mut project_context = llm::extract_project_context();
+        eprintln!(
+            "[AUDIO GEN] Project context extracted: {}",
+            project_context.repo_name
+        );
 
         if config.use_llm_explanations && config.openai_api_key.is_some() {
+            eprintln!("[AUDIO GEN] Calling LLM to generate project description...");
             match llm::generate_project_context_with_llm(&config).await {
-                Ok(desc) => project_context.description = desc,
-                Err(_) => return Vec::new(),
+                Ok(desc) => {
+                    eprintln!("[AUDIO GEN] LLM project description received");
+                    project_context.description = desc;
+                }
+                Err(e) => {
+                    eprintln!("[AUDIO GEN] LLM project description failed: {:?}", e);
+                    return Vec::new();
+                }
             }
         } else {
+            eprintln!("[AUDIO GEN] LLM disabled or no API key");
             return Vec::new();
         }
 
@@ -239,6 +313,18 @@ pub fn generate_audio_chunks(
             })
             .collect();
 
+        if let Some(ref p) = progress {
+            let _ = p.lock().map(|mut s| {
+                *s = (
+                    format!(
+                        "Ordering {} files by development flow...",
+                        important_files.len()
+                    ),
+                    0.1,
+                )
+            });
+        }
+
         let ordered = llm::order_files_by_development_flow(
             &config,
             &project_context,
@@ -249,8 +335,25 @@ pub fn generate_audio_chunks(
 
         let mut all_chunks: Vec<DiffChunk> = Vec::new();
         let mut global_id = 0usize;
+        let total_files = ordered.len();
 
         for (i, (filename, diff, _)) in ordered.iter().enumerate() {
+            // Progress: 15% to 95% based on file processing
+            let file_progress = 0.15 + (0.80 * (i as f32 / total_files.max(1) as f32));
+
+            if let Some(ref p) = progress {
+                let _ = p.lock().map(|mut s| {
+                    *s = (
+                        format!(
+                            "Processing file {}/{}: {}",
+                            i + 1,
+                            total_files,
+                            filename.rsplit('/').next().unwrap_or(filename)
+                        ),
+                        file_progress,
+                    )
+                });
+            }
             if i > 0 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             }
@@ -270,20 +373,30 @@ pub fn generate_audio_chunks(
                     global_id += 1;
 
                     let word_count = chunk.explanation.split_whitespace().count();
+
+                    if let Some(ref p) = progress {
+                        let _ = p.lock().map(|mut s| {
+                            *s = (
+                                format!(
+                                    "Synthesizing audio {}/{}: {} (chunk {})",
+                                    i + 1,
+                                    total_files,
+                                    filename.rsplit('/').next().unwrap_or(filename),
+                                    chunk.chunk_id + 1
+                                ),
+                                file_progress,
+                            )
+                        });
+                    }
+
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
                     if let Ok(audio_data) =
                         tts::synthesize_speech_from_text(&config, &chunk.explanation).await
                     {
-                        let real_duration = {
-                            let cursor = std::io::Cursor::new(audio_data.clone());
-                            Decoder::new(cursor)
-                                .ok()
-                                .and_then(|s| s.total_duration())
-                                .map(|d| d.as_secs_f32())
-                        };
-                        chunk.audio_duration_secs =
-                            real_duration.unwrap_or((word_count as f32) / 2.5);
+                        // Use estimated duration based on word count instead of decoding
+                        // to avoid potential audio device conflicts
+                        chunk.audio_duration_secs = (word_count as f32) / 2.5;
                         chunk.audio_data = Some(audio_data);
                         chunk.has_audio = true;
                     }
@@ -298,6 +411,75 @@ pub fn generate_audio_chunks(
             }
         }
 
+        if let Some(ref p) = progress {
+            let _ = p.lock().map(|mut s| *s = ("Complete!".to_string(), 1.0));
+        }
+
         all_chunks
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(id: usize, file: &str) -> DiffChunk {
+        DiffChunk {
+            chunk_id: id,
+            file_path: file.to_string(),
+            hunk_indices: vec![0],
+            explanation: "test".to_string(),
+            audio_data: Some(vec![1, 2, 3]),
+            has_audio: true,
+            audio_duration_secs: 1.0,
+        }
+    }
+
+    #[test]
+    fn get_chunks_for_file_returns_only_matching_path() {
+        let player = AudioPlayer::new(VoiceoverConfig::default())
+            .expect("disabled audio player should init");
+        let chunks = player.chunks_handle();
+        {
+            let mut guard = chunks.lock().expect("chunks lock should succeed");
+            guard.insert(1, chunk(1, "src/a.rs"));
+            guard.insert(2, chunk(2, "src/b.rs"));
+            guard.insert(3, chunk(3, "src/a.rs"));
+        }
+
+        let a_chunks = player.get_chunks_for_file("src/a.rs");
+        let b_chunks = player.get_chunks_for_file("src/b.rs");
+        let missing = player.get_chunks_for_file("src/missing.rs");
+
+        assert_eq!(a_chunks.len(), 2);
+        assert!(a_chunks.iter().all(|c| c.file_path == "src/a.rs"));
+        assert_eq!(b_chunks.len(), 1);
+        assert!(b_chunks.iter().all(|c| c.file_path == "src/b.rs"));
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn poll_finished_chunks_drains_all_pending_ids() {
+        let player = AudioPlayer::new(VoiceoverConfig::default())
+            .expect("disabled audio player should init");
+
+        player
+            .chunk_finished_tx
+            .send(5)
+            .expect("send should succeed");
+        player
+            .chunk_finished_tx
+            .send(6)
+            .expect("send should succeed");
+        player
+            .chunk_finished_tx
+            .send(7)
+            .expect("send should succeed");
+
+        let drained_once = player.poll_finished_chunks();
+        let drained_twice = player.poll_finished_chunks();
+
+        assert_eq!(drained_once, vec![5, 6, 7]);
+        assert!(drained_twice.is_empty());
+    }
 }

@@ -82,6 +82,8 @@ pub struct EditorBuffer {
     /// Pre-calculated byte offsets for each line (handles CRLF correctly)
     pub old_content_line_offsets: Vec<usize>,
     pub new_content_line_offsets: Vec<usize>,
+    /// Track which lines are additions (for green highlighting)
+    pub added_lines: std::collections::HashSet<usize>,
 }
 
 impl EditorBuffer {
@@ -99,6 +101,7 @@ impl EditorBuffer {
             new_content_lines: Vec::new(),
             old_content_line_offsets: Vec::new(),
             new_content_line_offsets: Vec::new(),
+            added_lines: std::collections::HashSet::new(),
         }
     }
 
@@ -122,6 +125,7 @@ impl EditorBuffer {
             new_content_lines: Vec::new(),
             old_content_line_offsets: Vec::new(),
             new_content_line_offsets: Vec::new(),
+            added_lines: std::collections::HashSet::new(),
         }
     }
 
@@ -914,11 +918,24 @@ impl AnimationEngine {
 
         // Get audio chunks for this file (only those with audio)
         let audio_chunks = if let Some(audio_player) = &self.audio_player {
-            audio_player
+            let chunks: Vec<_> = audio_player
                 .get_chunks_for_file(&change.path)
                 .into_iter()
                 .filter(|c| c.has_audio)
-                .collect::<Vec<_>>()
+                .collect();
+            eprintln!(
+                "[AUDIO DEBUG] File: {}, Hunks: {}, Audio chunks: {}",
+                change.path,
+                change.hunks.len(),
+                chunks.len()
+            );
+            for chunk in &chunks {
+                eprintln!(
+                    "  Chunk {}: hunk_indices={:?}, has_audio={}, duration={:.1}s",
+                    chunk.chunk_id, chunk.hunk_indices, chunk.has_audio, chunk.audio_duration_secs
+                );
+            }
+            chunks
         } else {
             Vec::new()
         };
@@ -931,6 +948,16 @@ impl AnimationEngine {
             let matching_chunk = audio_chunks
                 .iter()
                 .find(|chunk| chunk.hunk_indices.contains(&hunk_idx));
+
+            if matching_chunk.is_some() {
+                eprintln!(
+                    "  Hunk {} matched to chunk {:?}",
+                    hunk_idx,
+                    matching_chunk.as_ref().map(|c| c.chunk_id)
+                );
+            } else {
+                eprintln!("  Hunk {} NO MATCH", hunk_idx);
+            }
 
             // If we've entered a new chunk, start its audio
             if let Some(chunk) = matching_chunk {
@@ -1308,6 +1335,9 @@ impl AnimationEngine {
                 self.buffer.cursor_line = line;
                 self.buffer.cursor_col = content_len;
 
+                // Mark this line as an addition (for green highlighting)
+                self.buffer.added_lines.insert(line);
+
                 // Track line offset for old_highlights mapping
                 self.line_offset += 1;
             }
@@ -1322,6 +1352,20 @@ impl AnimationEngine {
                     .get(line)
                     .map(|l| l.chars().take_while(|c| c.is_whitespace()).count())
                     .unwrap_or(0);
+
+                // Update added_lines set: remove the deleted line and shift down all lines after it
+                self.buffer.added_lines.remove(&line);
+                let lines_to_update: Vec<usize> = self
+                    .buffer
+                    .added_lines
+                    .iter()
+                    .filter(|&&l| l > line)
+                    .copied()
+                    .collect();
+                for old_line in lines_to_update {
+                    self.buffer.added_lines.remove(&old_line);
+                    self.buffer.added_lines.insert(old_line - 1);
+                }
 
                 // Track line offset for old_highlights mapping
                 self.line_offset -= 1;
@@ -1525,5 +1569,225 @@ impl AnimationEngine {
     /// Returns true if the animation has completed.
     pub fn is_finished(&self) -> bool {
         self.state == AnimationState::Finished
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::arc_with_non_send_sync)]
+mod tests {
+    use super::*;
+    use crate::audio::{DiffChunk, VoiceoverConfig};
+    use crate::git::LineChange;
+    use chrono::Utc;
+    use std::sync::Arc;
+
+    fn make_line(change_type: LineChangeType, content: &str) -> LineChange {
+        LineChange {
+            change_type,
+            content: content.to_string(),
+            old_line_no: Some(1),
+            new_line_no: Some(1),
+        }
+    }
+
+    fn make_hunk() -> DiffHunk {
+        DiffHunk {
+            old_start: 1,
+            old_lines: 1,
+            new_start: 1,
+            new_lines: 1,
+            lines: vec![make_line(LineChangeType::Context, "fn demo() {}\n")],
+        }
+    }
+
+    fn make_file(path: &str) -> FileChange {
+        FileChange {
+            path: path.to_string(),
+            old_path: None,
+            status: FileStatus::Modified,
+            is_binary: false,
+            is_excluded: false,
+            exclusion_reason: None,
+            old_content: Some("fn demo() {}\n".to_string()),
+            new_content: Some("fn demo() {}\n".to_string()),
+            hunks: vec![make_hunk()],
+            diff: String::new(),
+        }
+    }
+
+    fn make_commit(changes: Vec<FileChange>) -> CommitMetadata {
+        CommitMetadata {
+            hash: "1234567890abcdef".to_string(),
+            author: "test".to_string(),
+            date: Utc::now(),
+            message: "test commit".to_string(),
+            changes,
+        }
+    }
+
+    fn make_chunk(chunk_id: usize, file_path: &str, hunk_indices: Vec<usize>) -> DiffChunk {
+        DiffChunk {
+            chunk_id,
+            file_path: file_path.to_string(),
+            hunk_indices,
+            explanation: "explanation".to_string(),
+            audio_data: Some(vec![1, 2, 3]),
+            has_audio: true,
+            audio_duration_secs: 1.0,
+        }
+    }
+
+    fn set_chunks(player: &crate::audio::AudioPlayer, chunks: Vec<DiffChunk>) {
+        let handle = player.chunks_handle();
+        let mut guard = handle.lock().expect("chunks map lock should succeed");
+        for chunk in chunks {
+            guard.insert(chunk.chunk_id, chunk);
+        }
+    }
+
+    #[test]
+    fn wait_step_unblocks_immediately_when_chunk_already_finished() {
+        let mut engine = AnimationEngine::new(1);
+        engine.finished_audio_chunks.insert(3);
+
+        engine.execute_step(AnimationStep::WaitForAudio { chunk_id: 3 });
+
+        assert_eq!(engine.current_audio_chunk, None);
+        assert!(!engine.audio_chunk_finished);
+        assert_eq!(engine.next_step_delay, 0);
+    }
+
+    #[test]
+    fn wait_step_blocks_until_expected_chunk_finishes() {
+        let mut engine = AnimationEngine::new(1);
+
+        engine.execute_step(AnimationStep::WaitForAudio { chunk_id: 7 });
+        assert_eq!(engine.current_audio_chunk, Some(7));
+        assert!(!engine.audio_chunk_finished);
+
+        engine.audio_chunk_finished();
+        assert_eq!(engine.current_audio_chunk, None);
+        assert!(engine.audio_chunk_finished);
+    }
+
+    #[test]
+    fn wait_step_does_not_unblock_for_other_finished_chunk_ids() {
+        let mut engine = AnimationEngine::new(1);
+        engine.finished_audio_chunks.insert(99);
+
+        engine.execute_step(AnimationStep::WaitForAudio { chunk_id: 7 });
+
+        assert_eq!(engine.current_audio_chunk, Some(7));
+        assert!(!engine.audio_chunk_finished);
+    }
+
+    #[test]
+    fn generate_steps_adds_final_wait_for_last_active_chunk() {
+        let mut engine = AnimationEngine::new(1);
+        let player = Arc::new(
+            crate::audio::AudioPlayer::new(VoiceoverConfig::default())
+                .expect("audio player should initialize when disabled"),
+        );
+        set_chunks(&player, vec![make_chunk(42, "src/a.rs", vec![0])]);
+        engine.set_audio_player(player);
+
+        let commit = make_commit(vec![make_file("src/a.rs")]);
+        engine.load_commit(&commit);
+
+        let has_start = engine
+            .steps
+            .iter()
+            .any(|s| matches!(s, AnimationStep::StartAudio { chunk_id } if *chunk_id == 42));
+        let has_wait = engine
+            .steps
+            .iter()
+            .any(|s| matches!(s, AnimationStep::WaitForAudio { chunk_id } if *chunk_id == 42));
+
+        assert!(has_start, "expected a StartAudio step for chunk 42");
+        assert!(
+            has_wait,
+            "expected a trailing WaitForAudio step for chunk 42"
+        );
+    }
+
+    #[test]
+    fn audio_steps_are_scoped_to_the_current_file() {
+        let mut engine = AnimationEngine::new(1);
+        let player = Arc::new(
+            crate::audio::AudioPlayer::new(VoiceoverConfig::default())
+                .expect("audio player should initialize when disabled"),
+        );
+        set_chunks(
+            &player,
+            vec![
+                make_chunk(10, "src/a.rs", vec![0]),
+                make_chunk(20, "src/b.rs", vec![0]),
+            ],
+        );
+        engine.set_audio_player(player);
+
+        let commit = make_commit(vec![make_file("src/a.rs"), make_file("src/b.rs")]);
+        engine.load_commit(&commit);
+
+        let mut current_file: Option<String> = None;
+        let mut a_ids = Vec::new();
+        let mut b_ids = Vec::new();
+
+        for step in &engine.steps {
+            match step {
+                AnimationStep::SwitchFile { path, .. } => current_file = Some(path.clone()),
+                AnimationStep::StartAudio { chunk_id }
+                | AnimationStep::WaitForAudio { chunk_id } => match current_file.as_deref() {
+                    Some("src/a.rs") => a_ids.push(*chunk_id),
+                    Some("src/b.rs") => b_ids.push(*chunk_id),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        assert!(
+            !a_ids.is_empty() && !b_ids.is_empty(),
+            "expected audio steps for both files"
+        );
+        assert!(
+            a_ids.iter().all(|id| *id == 10),
+            "audio for src/a.rs should only reference chunk 10"
+        );
+        assert!(
+            b_ids.iter().all(|id| *id == 20),
+            "audio for src/b.rs should only reference chunk 20"
+        );
+    }
+
+    #[test]
+    fn file_without_matching_chunks_emits_no_audio_steps() {
+        let mut engine = AnimationEngine::new(1);
+        let player = Arc::new(
+            crate::audio::AudioPlayer::new(VoiceoverConfig::default())
+                .expect("audio player should initialize when disabled"),
+        );
+        set_chunks(&player, vec![make_chunk(10, "src/a.rs", vec![0])]);
+        engine.set_audio_player(player);
+
+        let commit = make_commit(vec![make_file("src/a.rs"), make_file("src/no-audio.rs")]);
+        engine.load_commit(&commit);
+
+        let mut current_file: Option<String> = None;
+        let mut no_audio_file_step_count = 0usize;
+
+        for step in &engine.steps {
+            match step {
+                AnimationStep::SwitchFile { path, .. } => current_file = Some(path.clone()),
+                AnimationStep::StartAudio { .. } | AnimationStep::WaitForAudio { .. } => {
+                    if current_file.as_deref() == Some("src/no-audio.rs") {
+                        no_audio_file_step_count += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert_eq!(no_audio_file_step_count, 0);
     }
 }

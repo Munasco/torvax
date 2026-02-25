@@ -56,7 +56,7 @@ async fn synthesize_inworld(config: &VoiceoverConfig, text: &str) -> Result<Vec<
         .as_ref()
         .context("Inworld API key not configured (Basic auth base64)")?;
 
-    let voice_id = config.voice_id.as_deref().unwrap_or("Ashley");
+    let voice_id = config.voice_id.as_deref().unwrap_or("Simon");
     let model_id = config.model_id.as_deref().unwrap_or("inworld-tts-1.5-max");
 
     let client = reqwest::Client::new();
