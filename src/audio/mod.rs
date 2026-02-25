@@ -43,8 +43,10 @@ impl AudioPlayer {
             });
         }
 
-        let (_stream, stream_handle) =
-            OutputStream::try_default().context("Failed to create audio output stream")?;
+        eprintln!("[AUDIO INIT] Creating OutputStream...");
+        let (_stream, stream_handle) = OutputStream::try_default()
+            .context("Failed to create audio output stream during AudioPlayer::new()")?;
+        eprintln!("[AUDIO INIT] OutputStream created successfully");
         let sink = Sink::try_new(&stream_handle).context("Failed to create audio sink")?;
         sink.play();
 
@@ -88,6 +90,7 @@ impl AudioPlayer {
         if !self.config.enabled || self.sink.is_none() {
             return;
         }
+        eprintln!("[AUDIO] trigger_chunk({})", chunk_id);
         let chunks = self.chunks.clone();
         let sink = self.sink.clone();
         let tx = self.chunk_finished_tx.clone();
@@ -95,10 +98,18 @@ impl AudioPlayer {
         thread::spawn(move || {
             let chunk = chunks.lock().ok().and_then(|g| g.get(&chunk_id).cloned());
             if let Some(chunk) = chunk {
+                eprintln!(
+                    "[AUDIO] Chunk {} found, has_audio={}",
+                    chunk_id, chunk.has_audio
+                );
                 if let Some(audio_data) = chunk.audio_data {
+                    eprintln!(
+                        "[AUDIO] Chunk {} starting playback ({} bytes)",
+                        chunk_id,
+                        audio_data.len()
+                    );
                     if let Some(sink_arc) = sink {
-                        // Append source and release the lock immediately so
-                        // pause()/resume() on the main thread are never blocked.
+                        // Append source, wait for it to start, then wait for completion
                         {
                             let Ok(guard) = sink_arc.lock() else { return };
                             let cursor = std::io::Cursor::new(audio_data);
@@ -107,29 +118,26 @@ impl AudioPlayer {
                             };
                             guard.append(source);
                             guard.play();
-                        }; // lock released
+                        } // Lock released
 
-                        // Poll the sink to detect when audio actually finishes.
-                        // This respects pause/resume because sink.empty() only returns
-                        // true when audio has actually finished playing, not just
-                        // when the expected duration has elapsed.
-                        loop {
-                            thread::sleep(std::time::Duration::from_millis(50));
-
-                            // Check if sink is empty (audio finished)
-                            let is_empty = sink_arc
-                                .lock()
-                                .map(|guard| guard.empty())
-                                .unwrap_or(true);
-
-                            if is_empty {
-                                break;
-                            }
+                        // Wait for audio to start playing (sink becomes non-empty)
+                        while sink_arc.lock().map(|guard| guard.empty()).unwrap_or(true) {
+                            thread::sleep(std::time::Duration::from_millis(10));
                         }
 
+                        // Now wait for audio to finish (sink becomes empty again)
+                        while !sink_arc.lock().map(|guard| guard.empty()).unwrap_or(true) {
+                            thread::sleep(std::time::Duration::from_millis(50));
+                        }
+
+                        eprintln!("[AUDIO] Chunk {} finished playback", chunk_id);
                         let _ = tx.send(chunk_id);
                     }
+                } else {
+                    eprintln!("[AUDIO] Chunk {} has no audio_data", chunk_id);
                 }
+            } else {
+                eprintln!("[AUDIO] Chunk {} not found in chunks map", chunk_id);
             }
         });
     }
@@ -222,7 +230,12 @@ fn generate_audio_chunks_impl(
     speed_ms: u64,
     progress: Option<Arc<Mutex<(String, f32)>>>,
 ) -> Vec<DiffChunk> {
+    eprintln!(
+        "[AUDIO GEN] Starting audio generation, {} file changes",
+        file_changes.len()
+    );
     if !config.enabled || config.api_key.is_none() {
+        eprintln!("[AUDIO GEN] Audio disabled or no API key, returning empty");
         return Vec::new();
     }
 
@@ -231,26 +244,48 @@ fn generate_audio_chunks_impl(
         guard.clear();
     }
 
+    eprintln!("[AUDIO GEN] Creating tokio runtime...");
     let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(_) => return Vec::new(),
+        Ok(rt) => {
+            eprintln!("[AUDIO GEN] Tokio runtime created");
+            rt
+        }
+        Err(e) => {
+            eprintln!("[AUDIO GEN] Failed to create tokio runtime: {:?}", e);
+            return Vec::new();
+        }
     };
 
+    eprintln!("[AUDIO GEN] Entering async block...");
     rt.block_on(async {
+        eprintln!("[AUDIO GEN] Inside async block, starting project context generation...");
         if let Some(ref p) = progress {
             let _ = p
                 .lock()
                 .map(|mut s| *s = ("Generating project context with GPT...".to_string(), 0.05));
         }
 
+        eprintln!("[AUDIO GEN] Calling extract_project_context...");
         let mut project_context = llm::extract_project_context();
+        eprintln!(
+            "[AUDIO GEN] Project context extracted: {}",
+            project_context.repo_name
+        );
 
         if config.use_llm_explanations && config.openai_api_key.is_some() {
+            eprintln!("[AUDIO GEN] Calling LLM to generate project description...");
             match llm::generate_project_context_with_llm(&config).await {
-                Ok(desc) => project_context.description = desc,
-                Err(_) => return Vec::new(),
+                Ok(desc) => {
+                    eprintln!("[AUDIO GEN] LLM project description received");
+                    project_context.description = desc;
+                }
+                Err(e) => {
+                    eprintln!("[AUDIO GEN] LLM project description failed: {:?}", e);
+                    return Vec::new();
+                }
             }
         } else {
+            eprintln!("[AUDIO GEN] LLM disabled or no API key");
             return Vec::new();
         }
 
@@ -359,15 +394,9 @@ fn generate_audio_chunks_impl(
                     if let Ok(audio_data) =
                         tts::synthesize_speech_from_text(&config, &chunk.explanation).await
                     {
-                        let real_duration = {
-                            let cursor = std::io::Cursor::new(audio_data.clone());
-                            Decoder::new(cursor)
-                                .ok()
-                                .and_then(|s| s.total_duration())
-                                .map(|d| d.as_secs_f32())
-                        };
-                        chunk.audio_duration_secs =
-                            real_duration.unwrap_or((word_count as f32) / 2.5);
+                        // Use estimated duration based on word count instead of decoding
+                        // to avoid potential audio device conflicts
+                        chunk.audio_duration_secs = (word_count as f32) / 2.5;
                         chunk.audio_data = Some(audio_data);
                         chunk.has_audio = true;
                     }

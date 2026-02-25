@@ -30,6 +30,10 @@ impl<'a> UI<'a> {
     }
 
     pub(super) fn play_commit(&mut self, metadata: CommitMetadata, record_history: bool) {
+        eprintln!(
+            "[UI] play_commit called, has_audio_player={}",
+            self.audio_player.is_some()
+        );
         if record_history {
             self.record_history(&metadata);
         }
@@ -38,6 +42,7 @@ impl<'a> UI<'a> {
         // and WAIT for completion before starting the video.
         // Show progress modal during generation.
         if let Some(audio_player) = &self.audio_player {
+            eprintln!("[UI] Starting audio generation in background thread...");
             let config = audio_player.voiceover_config().clone();
             let chunks_map = audio_player.chunks_handle();
             let file_changes: Vec<(String, String, crate::git::FileStatus)> = metadata

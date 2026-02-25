@@ -107,8 +107,14 @@ pub fn create_audio_player(config: &Config, args: &Args) -> Result<Option<Arc<Au
     let _ = Config::enable_voiceover();
     let _ = Config::save_voiceover_key("use_llm_explanations", "true");
 
+    eprintln!("[SETUP] Creating AudioPlayer...");
     match AudioPlayer::new(vc) {
-        Ok(player) => Ok(Some(Arc::new(player))),
+        Ok(player) => {
+            eprintln!("[SETUP] AudioPlayer created successfully, wrapping in Arc...");
+            let arc_player = Arc::new(player);
+            eprintln!("[SETUP] Arc<AudioPlayer> created, returning...");
+            Ok(Some(arc_player))
+        }
         Err(e) => {
             eprintln!("\ntorvax: Failed to initialize audio: {}", e);
             Ok(None)
