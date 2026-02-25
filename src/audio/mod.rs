@@ -8,7 +8,7 @@ pub use types::{
 };
 
 use anyhow::{Context, Result};
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStream, Sink};
 use std::collections::VecDeque;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -417,4 +417,69 @@ fn generate_audio_chunks_impl(
 
         all_chunks
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk(id: usize, file: &str) -> DiffChunk {
+        DiffChunk {
+            chunk_id: id,
+            file_path: file.to_string(),
+            hunk_indices: vec![0],
+            explanation: "test".to_string(),
+            audio_data: Some(vec![1, 2, 3]),
+            has_audio: true,
+            audio_duration_secs: 1.0,
+        }
+    }
+
+    #[test]
+    fn get_chunks_for_file_returns_only_matching_path() {
+        let player = AudioPlayer::new(VoiceoverConfig::default())
+            .expect("disabled audio player should init");
+        let chunks = player.chunks_handle();
+        {
+            let mut guard = chunks.lock().expect("chunks lock should succeed");
+            guard.insert(1, chunk(1, "src/a.rs"));
+            guard.insert(2, chunk(2, "src/b.rs"));
+            guard.insert(3, chunk(3, "src/a.rs"));
+        }
+
+        let a_chunks = player.get_chunks_for_file("src/a.rs");
+        let b_chunks = player.get_chunks_for_file("src/b.rs");
+        let missing = player.get_chunks_for_file("src/missing.rs");
+
+        assert_eq!(a_chunks.len(), 2);
+        assert!(a_chunks.iter().all(|c| c.file_path == "src/a.rs"));
+        assert_eq!(b_chunks.len(), 1);
+        assert!(b_chunks.iter().all(|c| c.file_path == "src/b.rs"));
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn poll_finished_chunks_drains_all_pending_ids() {
+        let player = AudioPlayer::new(VoiceoverConfig::default())
+            .expect("disabled audio player should init");
+
+        player
+            .chunk_finished_tx
+            .send(5)
+            .expect("send should succeed");
+        player
+            .chunk_finished_tx
+            .send(6)
+            .expect("send should succeed");
+        player
+            .chunk_finished_tx
+            .send(7)
+            .expect("send should succeed");
+
+        let drained_once = player.poll_finished_chunks();
+        let drained_twice = player.poll_finished_chunks();
+
+        assert_eq!(drained_once, vec![5, 6, 7]);
+        assert!(drained_twice.is_empty());
+    }
 }
