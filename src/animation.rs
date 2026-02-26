@@ -918,24 +918,11 @@ impl AnimationEngine {
 
         // Get audio chunks for this file (only those with audio)
         let audio_chunks = if let Some(audio_player) = &self.audio_player {
-            let chunks: Vec<_> = audio_player
+            audio_player
                 .get_chunks_for_file(&change.path)
                 .into_iter()
                 .filter(|c| c.has_audio)
-                .collect();
-            eprintln!(
-                "[AUDIO DEBUG] File: {}, Hunks: {}, Audio chunks: {}",
-                change.path,
-                change.hunks.len(),
-                chunks.len()
-            );
-            for chunk in &chunks {
-                eprintln!(
-                    "  Chunk {}: hunk_indices={:?}, has_audio={}, duration={:.1}s",
-                    chunk.chunk_id, chunk.hunk_indices, chunk.has_audio, chunk.audio_duration_secs
-                );
-            }
-            chunks
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
@@ -948,16 +935,6 @@ impl AnimationEngine {
             let matching_chunk = audio_chunks
                 .iter()
                 .find(|chunk| chunk.hunk_indices.contains(&hunk_idx));
-
-            if matching_chunk.is_some() {
-                eprintln!(
-                    "  Hunk {} matched to chunk {:?}",
-                    hunk_idx,
-                    matching_chunk.as_ref().map(|c| c.chunk_id)
-                );
-            } else {
-                eprintln!("  Hunk {} NO MATCH", hunk_idx);
-            }
 
             // If we've entered a new chunk, start its audio
             if let Some(chunk) = matching_chunk {
